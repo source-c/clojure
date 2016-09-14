@@ -107,12 +107,11 @@ itself (not its value) is returned. The reader macro #'x expands to (var x)."}})
     (println "Spec"))
   (when doc (println " " doc))
   (when n
-    (when-let [specs (spec/fn-specs (symbol (str (ns-name n)) (name nm)))]
+    (when-let [fnspec (spec/get-spec (symbol (str (ns-name n)) (name nm)))]
       (println "Spec")
-      (run! (fn [[role spec]]
-              (when (and spec (not (= spec ::spec/unknown)))
-                (println " " (str (name role) ":") (spec/describe spec))))
-        specs))))
+      (doseq [role [:args :ret :fn]]
+        (when-let [spec (get fnspec role)]
+          (println " " (str (name role) ":") (spec/describe spec)))))))
 
 (defn find-doc
   "Prints documentation for any var whose documentation or name
@@ -196,9 +195,9 @@ str-or-pattern."
 
 (defn dir-fn
   "Returns a sorted seq of symbols naming public vars in
-  a namespace"
+  a namespace or namespace alias. Looks for aliases in *ns*"
   [ns]
-  (sort (map first (ns-publics (the-ns ns)))))
+  (sort (map first (ns-publics (the-ns (get (ns-aliases *ns*) ns ns))))))
 
 (defmacro dir
   "Prints a sorted directory of public vars in a namespace"

@@ -298,6 +298,8 @@ static public void addURL(Object url) throws MalformedURLException{
 		throw new IllegalAccessError("Context classloader is not a DynamicClassLoader");
 }
 
+public static boolean checkSpecAsserts = Boolean.getBoolean("clojure.spec.check-asserts");
+
 static{
 	Keyword arglistskw = Keyword.intern(null, "arglists");
 	Symbol namesym = Symbol.intern("name");
@@ -460,6 +462,7 @@ static public void load(String scriptbase, boolean failIfNotFound) throws IOExce
 static void doInit() throws ClassNotFoundException, IOException{
 	load("clojure/core");
 	load("clojure/spec");
+	load("clojure/core/specs");
 
 	Var.pushThreadBindings(
 			RT.mapUniqueKeys(CURRENT_NS, CURRENT_NS.deref(),

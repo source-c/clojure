@@ -33,157 +33,123 @@
         opt (s/? keyword?)
         andre (s/& (s/* keyword?) even-count?)
         m (s/map-of keyword? string?)
-        coll (s/coll-of keyword? [])]
+        mkeys (s/map-of (s/and keyword? (s/conformer name)) any?)
+        mkeys2 (s/map-of (s/and keyword? (s/conformer name)) any? :conform-keys true)
+        s (s/coll-of (s/spec (s/cat :tag keyword? :val any?)) :kind list?)
+        v (s/coll-of keyword? :kind vector?)
+        coll (s/coll-of keyword?)
+        lrange (s/int-in 7 42)
+        drange (s/double-in :infinite? false :NaN? false :min 3.1 :max 3.2)
+        irange (s/inst-in #inst "1939" #inst "1946")
+        ]
     (are [spec x conformed ed]
       (let [co (result-or-ex (s/conform spec x))
             e (result-or-ex (::s/problems (s/explain-data spec x)))]
         (when (not= conformed co) (println "conform fail\n\texpect=" conformed "\n\tactual=" co))
-        (when (not (submap? ed e)) (println "explain fail\n\texpect=" ed "\n\tactual=" e))
-        (and (= conformed co) (submap? ed e)))
+        (when (not (every? true? (map submap? ed e)))
+          (println "explain failures\n\texpect=" ed "\n\tactual failures=" e "\n\tsubmap?=" (map submap? ed e)))
+        (and (= conformed co) (every? true? (map submap? ed e))))
+
+      lrange 7 7 nil
+      lrange 8 8 nil
+      lrange 42 ::s/invalid [{:pred '(int-in-range? 7 42 %), :val 42}]
+
+      irange #inst "1938" ::s/invalid [{:pred '(inst-in-range? #inst "1939-01-01T00:00:00.000-00:00" #inst "1946-01-01T00:00:00.000-00:00" %), :val #inst "1938"}]
+      irange #inst "1942" #inst "1942" nil
+      irange #inst "1946" ::s/invalid [{:pred '(inst-in-range? #inst "1939-01-01T00:00:00.000-00:00" #inst "1946-01-01T00:00:00.000-00:00" %), :val #inst "1946"}]
+
+      drange 3.0 ::s/invalid [{:pred '(<= 3.1 %), :val 3.0}]
+      drange 3.1 3.1 nil
+      drange 3.2 3.2 nil
+      drange Double/POSITIVE_INFINITY ::s/invalid [{:pred '(not (isInfinite %)), :val Double/POSITIVE_INFINITY}]
+      ;; can't use equality-based test for Double/NaN
+      ;; drange Double/NaN ::s/invalid {[] {:pred '(not (isNaN %)), :val Double/NaN}}
 
       keyword? :k :k nil
-      keyword? nil ::s/invalid {[] {:pred ::s/unknown :val nil :via []}}
-      keyword? "abc" ::s/invalid {[] {:pred ::s/unknown :val "abc" :via []}}
+      keyword? nil ::s/invalid [{:pred ::s/unknown :val nil}]
+      keyword? "abc" ::s/invalid [{:pred ::s/unknown :val "abc"}]
 
       a 6 6 nil
-      a 3 ::s/invalid '{[] {:pred (> % 5), :val 3 :via []}}
-      a 20 ::s/invalid '{[] {:pred (< % 10), :val 20 :via []}}
+      a 3 ::s/invalid '[{:pred (> % 5), :val 3}]
+      a 20 ::s/invalid '[{:pred (< % 10), :val 20}]
       a nil "java.lang.NullPointerException" "java.lang.NullPointerException"
       a :k "java.lang.ClassCastException" "java.lang.ClassCastException"
 
       o "a" [:s "a"] nil
       o :a [:k :a] nil
-      o 'a ::s/invalid '{[:s] {:pred string?, :val a :via []}, [:k] {:pred keyword?, :val a :via []}}
+      o 'a ::s/invalid '[{:pred string?, :val a, :path [:s]} {:pred keyword?, :val a :path [:k]}]
 
-      c nil ::s/invalid '{[:a] {:reason "Insufficient input", :pred string?, :val (), :via []}}
-      c [] ::s/invalid '{[:a] {:reason "Insufficient input", :pred string?, :val (), :via []}}
-      c [:a] ::s/invalid '{[:a] {:pred string?, :val :a, :via []}}
-      c ["a"] ::s/invalid '{[:b] {:reason "Insufficient input", :pred keyword?, :val (), :via []}}
+      c nil ::s/invalid '[{:reason "Insufficient input", :pred string?, :val (), :path [:a]}]
+      c [] ::s/invalid '[{:reason "Insufficient input", :pred string?, :val (), :path [:a]}]
+      c [:a] ::s/invalid '[{:pred string?, :val :a, :path [:a], :in [0]}]
+      c ["a"] ::s/invalid '[{:reason "Insufficient input", :pred keyword?, :val (), :path [:b]}]
       c ["s" :k] '{:a "s" :b :k} nil
-      c ["s" :k 5] ::s/invalid '{[] {:reason "Extra input", :pred (cat :a string? :b keyword?), :val (5), :via []}}
+      c ["s" :k 5] ::s/invalid '[{:reason "Extra input", :pred (cat :a string? :b keyword?), :val (5)}]
+      (s/cat) nil {} nil
+      (s/cat) [5] ::s/invalid '[{:reason "Extra input", :pred (cat), :val (5), :in [0]}]
 
-      either nil ::s/invalid '{[] {:reason "Insufficient input", :pred (alt :a string? :b keyword?), :val () :via []}}
-      either [] ::s/invalid '{[] {:reason "Insufficient input", :pred (alt :a string? :b keyword?), :val () :via []}}
+      either nil ::s/invalid '[{:reason "Insufficient input", :pred (alt :a string? :b keyword?), :val () :via []}]
+      either [] ::s/invalid '[{:reason "Insufficient input", :pred (alt :a string? :b keyword?), :val () :via []}]
       either [:k] [:b :k] nil
       either ["s"] [:a "s"] nil
-      either [:b "s"] ::s/invalid '{[] {:reason "Extra input", :pred (alt :a string? :b keyword?), :val ("s") :via []}}
+      either [:b "s"] ::s/invalid '[{:reason "Extra input", :pred (alt :a string? :b keyword?), :val ("s") :via []}]
 
       star nil [] nil
       star [] [] nil
       star [:k] [:k] nil
       star [:k1 :k2] [:k1 :k2] nil
-      star [:k1 :k2 "x"] ::s/invalid '{[] {:pred keyword?, :val "x" :via []}}
-      star ["a"] ::s/invalid {[] '{:pred keyword?, :val "a" :via []}}
+      star [:k1 :k2 "x"] ::s/invalid '[{:pred keyword?, :val "x" :via []}]
+      star ["a"] ::s/invalid '[{:pred keyword?, :val "a" :via []}]
 
-      plus nil ::s/invalid '{[] {:reason "Insufficient input", :pred keyword?, :val () :via []}}
-      plus [] ::s/invalid '{[] {:reason "Insufficient input", :pred keyword?, :val () :via []}}
+      plus nil ::s/invalid '[{:reason "Insufficient input", :pred keyword?, :val () :via []}]
+      plus [] ::s/invalid '[{:reason "Insufficient input", :pred keyword?, :val () :via []}]
       plus [:k] [:k] nil
       plus [:k1 :k2] [:k1 :k2] nil
-      ;;plus [:k1 :k2 "x"] ::s/invalid '{[] {:reason "Extra input", :pred (cat :_ (* keyword?)), :val (x), :via [], :in [2]}}
-      plus ["a"] ::s/invalid '{[] {:pred keyword?, :val "a" :via []}}
+      plus [:k1 :k2 "x"] ::s/invalid '[{:pred keyword?, :val "x", :in [2]}]
+      plus ["a"] ::s/invalid '[{:pred keyword?, :val "a" :via []}]
 
       opt nil nil nil
       opt [] nil nil
-      opt :k ::s/invalid '{[] {:pred (alt), :val :k, :via []}}
+      opt :k ::s/invalid '[{:pred (? keyword?), :val :k}]
       opt [:k] :k nil
-      opt [:k1 :k2] ::s/invalid '{[] {:reason "Extra input", :pred (alt), :val (:k2), :via []}}
-      opt [:k1 :k2 "x"] ::s/invalid '{[] {:reason "Extra input", :pred (alt), :val (:k2 "x"), :via []}}
-      opt ["a"] ::s/invalid '{[] {:pred keyword?, :val "a", :via []}}
+      opt [:k1 :k2] ::s/invalid '[{:reason "Extra input", :pred (? keyword?), :val (:k2)}]
+      opt [:k1 :k2 "x"] ::s/invalid '[{:reason "Extra input", :pred (? keyword?), :val (:k2 "x")}]
+      opt ["a"] ::s/invalid '[{:pred keyword?, :val "a"}]
 
       andre nil nil nil
       andre [] nil nil
-      andre :k :clojure.spec/invalid '{[] {:pred (& (* keyword?) even-count?), :val :k, :via []}}
-      andre [:k] ::s/invalid '{[] {:pred even-count?, :val [:k], :via []}}
+      andre :k :clojure.spec/invalid '[{:pred (& (* keyword?) even-count?), :val :k}]
+      andre [:k] ::s/invalid '[{:pred even-count?, :val [:k]}]
       andre [:j :k] [:j :k] nil
 
-      m nil ::s/invalid '{[] {:pred map?, :val nil, :via []}}
+      m nil ::s/invalid '[{:pred map?, :val nil}]
       m {} {} nil
       m {:a "b"} {:a "b"} nil
-      m {:a :b} ::s/invalid '{[] {:pred (coll-checker (tuple keyword? string?)), :val {:a :b}, :via []}}
 
-      coll nil nil nil
+      mkeys nil ::s/invalid '[{:pred map?, :val nil}]
+      mkeys {} {} nil
+      mkeys {:a 1 :b 2} {:a 1 :b 2} nil
+
+      mkeys2 nil ::s/invalid '[{:pred map?, :val nil}]
+      mkeys2 {} {} nil
+      mkeys2 {:a 1 :b 2} {"a" 1 "b" 2} nil
+
+      s '([:a 1] [:b "2"]) '({:tag :a :val 1} {:tag :b :val "2"}) nil
+
+      v [:a :b] [:a :b] nil
+      v '(:a :b) ::s/invalid '[{:pred vector? :val (:a :b)}]
+
+      coll nil ::s/invalid '[{:path [], :pred coll?, :val nil, :via [], :in []}]
       coll [] [] nil
       coll [:a] [:a] nil
       coll [:a :b] [:a :b] nil
-      ;;coll [:a "b"] ::s/invalid '{[] {:pred (coll-checker keyword?), :val [:a b], :via []}}
+      coll (map identity [:a :b]) '(:a :b) nil
+      ;;coll [:a "b"] ::s/invalid '[{:pred (coll-checker keyword?), :val [:a b]}]
       )))
-
-(s/fdef flip-nums
-        :args (s/cat :arg1 integer? :arg2 integer?)
-        :ret vector?
-        :fn (fn [{:keys [args ret]}]
-              (= ret [(:arg2 args) (:arg1 args)])))
-
-(def ^:dynamic *break-flip-nums* false)
-(defn flip-nums
-  "Set *break-flip-nums* to break this fns compatibility with
-its spec for test purposes."
-  [a b]
-  (if *break-flip-nums*
-    (when-not (= a b)
-      (vec (sort [a b])))
-    [b a]))
-
-(defmacro get-ex-data
-  [x]
-  `(try
-    ~x
-    nil
-    (catch Throwable t#
-      (ex-data t#))))
-
-;; Note the the complicated equality comparisons below are exactly the
-;; kind of thing that spec helps you avoid, used here only because we
-;; are near the bottom, testing spec itself.
-(deftest test-instrument-flip-nums
-  (when-not (= "true" (System/getProperty "clojure.compiler.direct-linking"))
-    (binding [*break-flip-nums* true]
-      (try
-       (= [1 2] (flip-nums 2 1))
-       (= [:a :b] (flip-nums :a :b))
-       (= [1 2] (flip-nums 1 2))
-       (is (nil? (flip-nums 1 1)))
-       (s/instrument `flip-nums)
-       (is (= [1 2] (flip-nums 2 1)))
-       (is (submap? '{:clojure.spec/problems {[:args :arg1] {:pred integer?, :val :a, :via []}}, :clojure.spec/args (:a :b)}
-              (get-ex-data (flip-nums :a :b))))
-       (is (submap? '{:clojure.spec/problems {[:fn] {:pred (fn [{:keys [args ret]}] (= ret [(:arg2 args) (:arg1 args)])), :val {:args {:arg1 1, :arg2 2}, :ret [1 2]}, :via []}}, :clojure.spec/args (1 2)}
-              (get-ex-data (flip-nums 1 2))))
-       (is (submap? '{:clojure.spec/problems {[:ret] {:pred vector?, :val nil, :via []}}, :clojure.spec/args (1 1)}
-              (get-ex-data (flip-nums 1 1))))
-       (s/unstrument `flip-nums)
-       (= [1 2] (flip-nums 2 1))
-       (= [:a :b] (flip-nums :a :b))
-       (= [1 2] (flip-nums 1 2))
-       (is (nil? (flip-nums 1 1)))
-       (s/unstrument `flip-nums)))))
-
-(def core-pred-syms
-  (into #{}
-        (comp (map first) (filter (fn [s] (.endsWith (name s) "?"))))
-        (ns-publics 'clojure.core)))
-
-(def generatable-core-pred-syms
-  (into #{}
-        (filter #(gen/gen-for-pred @ (resolve %)))
-        core-pred-syms))
-
-(s/fdef generate-from-core-pred
-        :args (s/cat :s generatable-core-pred-syms)
-        :ret ::s/any
-        :fn (fn [{:keys [args ret]}]
-              (@(resolve (:s args)) ret)))
-
-(defn generate-from-core-pred
-  [s]
-  (gen/generate (gen/gen-for-pred @(resolve s))))
 
 (comment
   (require '[clojure.test :refer (run-tests)])
-  (in-ns 'test-clojure.spec)
+  (in-ns 'clojure.test-clojure.spec)
   (run-tests)
-
-  (stest/run-all-tests)
-  (stest/check-var #'generate-from-core-pred :num-tests 10000)
 
   )

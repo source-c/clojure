@@ -516,6 +516,11 @@
    :static true}
   [x] (clojure.lang.Util/identical x true))
 
+(defn boolean?
+  "Return true if x is a Boolean"
+  {:added "1.9"}
+  [x] (instance? Boolean x))
+
 (defn not
   "Returns true if x is logical false, false otherwise."
   {:tag Boolean
@@ -529,6 +534,12 @@
    :added "1.6"
    :static true}
   [x] (not (nil? x)))
+
+(defn any?
+  "Returns true given any argument."
+  {:tag Boolean
+   :added "1.9"}
+  [x] true)
 
 (defn str
   "With no args, returns the empty string. With one arg x, returns
@@ -1378,6 +1389,41 @@
    :static true}
   [n] (not (even? n)))
 
+(defn int?
+  "Return true if x is a fixed precision integer"
+  {:added "1.9"}
+  [x] (or (instance? Long x)
+          (instance? Integer x)
+          (instance? Short x)
+          (instance? Byte x)))
+
+(defn pos-int?
+  "Return true if x is a positive fixed precision integer"
+  {:added "1.9"}
+  [x] (and (int? x)
+           (pos? x)))
+
+(defn neg-int?
+  "Return true if x is a negative fixed precision integer"
+  {:added "1.9"}
+  [x] (and (int? x)
+           (neg? x)))
+
+(defn nat-int?
+  "Return true if x is a non-negative fixed precision integer"
+  {:added "1.9"}
+  [x] (and (int? x)
+           (not (neg? x))))
+
+(defn double?
+  "Return true if x is a Double"
+  {:added "1.9"}
+  [x] (instance? Double x))
+
+(defn bigdec?
+  "Return true if x is a BigDecimal"
+  {:added "1.9"}
+  [x] (instance? java.math.BigDecimal x))
 
 ;;
 
@@ -1553,6 +1599,41 @@
   [^clojure.lang.Named x]
     (. x (getNamespace)))
 
+(defn ident?
+  "Return true if x is a symbol or keyword"
+  {:added "1.9"}
+  [x] (or (keyword? x) (symbol? x)))
+
+(defn simple-ident?
+  "Return true if x is a symbol or keyword without a namespace"
+  {:added "1.9"}
+  [x] (and (ident? x) (nil? (namespace x))))
+
+(defn qualified-ident?
+  "Return true if x is a symbol or keyword with a namespace"
+  {:added "1.9"}
+  [x] (and (ident? x) (namespace x) true))
+
+(defn simple-symbol?
+  "Return true if x is a symbol without a namespace"
+  {:added "1.9"}
+  [x] (and (symbol? x) (nil? (namespace x))))
+
+(defn qualified-symbol?
+  "Return true if x is a symbol with a namespace"
+  {:added "1.9"}
+  [x] (and (symbol? x) (namespace x) true))
+
+(defn simple-keyword?
+  "Return true if x is a keyword without a namespace"
+  {:added "1.9"}
+  [x] (and (keyword? x) (nil? (namespace x))))
+
+(defn qualified-keyword?
+  "Return true if x is a keyword with a namespace"
+  {:added "1.9"}
+  [x] (and (keyword? x) (namespace x) true))
+
 (defmacro locking
   "Executes exprs in an implicit do, while holding the monitor of x.
   Will release the monitor of x in all circumstances."
@@ -1676,7 +1757,8 @@
                       m)
         m           (if (meta mm-name)
                       (conj (meta mm-name) m)
-                      m)]
+                      m)
+        mm-name (with-meta mm-name m)]
     (when (= (count options) 1)
       (throw (Exception. "The syntax for defmulti has changed. Example: (defmulti name dispatch-fn :default dispatch-value)")))
     (let [options   (apply hash-map options)
@@ -1685,7 +1767,7 @@
       (check-valid-options options :default :hierarchy)
       `(let [v# (def ~mm-name)]
          (when-not (and (.hasRoot v#) (instance? clojure.lang.MultiFn (deref v#)))
-           (def ~(with-meta mm-name m)
+           (def ~mm-name
                 (new clojure.lang.MultiFn ~(name mm-name) ~dispatch-fn ~default ~hierarchy)))))))
 
 (defmacro defmethod
@@ -4306,24 +4388,36 @@
                                          (if (:as b)
                                            (conj ret (:as b) gmap)
                                            ret))))
-                              bes (reduce1
-                                   (fn [bes entry]
-                                     (reduce1 #(assoc %1 %2 ((val entry) %2))
-                                              (dissoc bes (key entry))
-                                              ((key entry) bes)))
-                                   (dissoc b :as :or)
-                                   {:keys #(if (keyword? %) % (keyword (str %))),
-                                    :strs str, :syms #(list `quote %)})]
+                              bes (let [transforms
+                                          (reduce1
+                                            (fn [transforms mk]
+                                              (if (keyword? mk)
+                                                (let [mkns (namespace mk)
+                                                      mkn (name mk)]
+                                                  (cond (= mkn "keys") (assoc transforms mk #(keyword (or mkns (namespace %)) (name %)))
+                                                        (= mkn "syms") (assoc transforms mk #(list `quote (symbol (or mkns (namespace %)) (name %))))
+                                                        (= mkn "strs") (assoc transforms mk str)
+                                                        :else transforms))
+                                                transforms))
+                                            {}
+                                            (keys b))]
+                                    (reduce1
+                                        (fn [bes entry]
+                                          (reduce1 #(assoc %1 %2 ((val entry) %2))
+                                                   (dissoc bes (key entry))
+                                                   ((key entry) bes)))
+                                        (dissoc b :as :or)
+                                        transforms))]
                          (if (seq bes)
                            (let [bb (key (first bes))
                                  bk (val (first bes))
-                                 bv (if (contains? defaults bb)
-                                      (list `get gmap bk (defaults bb))
+                                 local (if (instance? clojure.lang.Named bb) (with-meta (symbol nil (name bb)) (meta bb)) bb)
+                                 bv (if (contains? defaults local)
+                                      (list `get gmap bk (defaults local))
                                       (list `get gmap bk))]
-                             (recur (cond
-                                     (symbol? bb) (-> ret (conj (if (namespace bb) (symbol (name bb)) bb)) (conj bv))
-                                     (keyword? bb) (-> ret (conj (symbol (name bb)) bv))
-                                     :else (pb ret bb bv))
+                             (recur (if (ident? bb)
+                                      (-> ret (conj local bv))
+                                      (pb ret bb bv))
                                     (next bes)))
                            ret))))]
                (cond
@@ -5195,6 +5289,13 @@
   {:added "1.0"}
   [xs] `(. clojure.lang.Numbers longs ~xs))
 
+(defn bytes?
+  "Return true if x is a byte array"
+  {:added "1.9"}
+  [x] (if (nil? x)
+        false
+        (-> x class .getComponentType (= Byte/TYPE))))
+
 (import '(java.util.concurrent BlockingQueue LinkedBlockingQueue))
 
 (defn seque
@@ -6003,6 +6104,11 @@
    :static true}
   [x] (instance? clojure.lang.IPersistentList x))
 
+(defn seqable?
+  "Return true if the seq function is supported for x"
+  {:added "1.9"}
+  [x] (clojure.lang.RT/canSeq x))
+
 (defn ifn?
   "Returns true if x implements IFn. Note that many data structures
   (e.g. sets and maps) implement IFn"
@@ -6046,6 +6152,11 @@
  {:added "1.0"
    :static true}
   [coll] (instance? clojure.lang.Reversible coll))
+
+(defn indexed?
+  "Return true if coll implements Indexed, indicating efficient lookup by index"
+  {:added "1.9"}
+  [coll] (instance? clojure.lang.Indexed coll))
 
 (def ^:dynamic
  ^{:doc "bound in a repl thread to the most recent value printed"
@@ -6539,7 +6650,38 @@
 (load "core/protocols")
 (load "gvec")
 (load "instant")
+
+(defprotocol Inst
+  (inst-ms* [inst]))
+
+(extend-protocol Inst
+  java.util.Date
+  (inst-ms* [inst] (.getTime ^java.util.Date inst)))
+
+;; conditionally extend to Instant on Java 8+
+(try
+  (Class/forName "java.time.Instant")
+  (load "core_instant18")
+  (catch ClassNotFoundException cnfe))
+
+(defn inst-ms
+  "Return the number of milliseconds since January 1, 1970, 00:00:00 GMT"
+  {:added "1.9"}
+  [inst]
+  (inst-ms* inst))
+
+(defn inst?
+  "Return true if x satisfies Inst"
+  {:added "1.9"}
+  [x]
+  (satisfies? Inst x))
+
 (load "uuid")
+
+(defn uuid?
+  "Return true if x is a java.util.UUID"
+  {:added "1.9"}
+  [x] (instance? java.util.UUID x))
 
 (defn reduce
   "f should be a function of 2 arguments. If val is not supplied,
@@ -7112,6 +7254,18 @@
                         (cons x (keepi (inc idx) (rest s)))))))))]
        (keepi 0 coll))))
 
+(defn bounded-count
+  "If coll is counted? returns its count, else will count at most the first n
+  elements of coll using its seq"
+  {:added "1.9"}
+  [n coll]
+  (if (counted? coll)
+    (count coll)
+    (loop [i 0 s (seq coll)]
+      (if (and s (< i n))
+        (recur (inc i) (next s))
+        i))))
+
 (defn every-pred
   "Takes a set of predicates and returns a function f that returns true if all of its
   composing predicates return a logical true value against all of its arguments, else it returns
@@ -7534,3 +7688,8 @@
  (catch Throwable t
    (.printStackTrace t)
    (throw t)))
+
+(defn uri?
+  "Return true if x is a java.net.URI"
+  {:added "1.9"}
+  [x] (instance? java.net.URI x))

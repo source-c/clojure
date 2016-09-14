@@ -4414,8 +4414,34 @@ static public class ObjExpr implements Expr{
 			ctorgen.visitCode();
 			ctorgen.loadThis();
 			ctorgen.loadArgs();
-			for(int i=0;i<altCtorDrops;i++)
-				ctorgen.visitInsn(Opcodes.ACONST_NULL);
+
+			ctorgen.visitInsn(Opcodes.ACONST_NULL); //__meta
+			ctorgen.visitInsn(Opcodes.ACONST_NULL); //__extmap
+			ctorgen.visitInsn(Opcodes.ICONST_0); //__hash
+			ctorgen.visitInsn(Opcodes.ICONST_0); //__hasheq
+
+			ctorgen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE, ctorTypes));
+
+			ctorgen.returnValue();
+			ctorgen.endMethod();
+
+            // alt ctor no __hash, __hasheq
+			altCtorTypes = new Type[ctorTypes.length-2];
+			for(int i=0;i<altCtorTypes.length;i++)
+				altCtorTypes[i] = ctorTypes[i];
+
+			alt = new Method("<init>", Type.VOID_TYPE, altCtorTypes);
+			ctorgen = new GeneratorAdapter(ACC_PUBLIC,
+															alt,
+															null,
+															null,
+															cv);
+			ctorgen.visitCode();
+			ctorgen.loadThis();
+			ctorgen.loadArgs();
+
+			ctorgen.visitInsn(Opcodes.ICONST_0); //__hash
+			ctorgen.visitInsn(Opcodes.ICONST_0); //__hasheq
 
 			ctorgen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE, ctorTypes));
 
@@ -5858,6 +5884,7 @@ public static class LocalBinding{
     public final PathNode clearPathRoot;
 	public boolean canBeCleared = !RT.booleanCast(getCompilerOption(disableLocalsClearingKey));
 	public boolean recurMistmatch = false;
+    public boolean used = false;
 
     public LocalBinding(int num, Symbol sym, Symbol tag, Expr init, boolean isArg,PathNode clearPathRoot)
                 {
@@ -5910,6 +5937,7 @@ public static class LocalBindingExpr implements Expr, MaybePrimitiveExpr, Assign
         this.clearPath = (PathNode)CLEAR_PATH.get();
         this.clearRoot = (PathNode)CLEAR_ROOT.get();
         IPersistentCollection sites = (IPersistentCollection) RT.get(CLEAR_SITES.get(),b);
+        b.used = true;
 
         if(b.idx > 0)
             {
@@ -6371,7 +6399,10 @@ public static class LetExpr implements Expr, MaybePrimitiveExpr{
 			else
 				{
 				bi.init.emit(C.EXPRESSION, objx, gen);
-				gen.visitVarInsn(OBJECT_TYPE.getOpcode(Opcodes.ISTORE), bi.binding.idx);
+				if (!bi.binding.used && bi.binding.canBeCleared)
+					gen.pop();
+				else
+					gen.visitVarInsn(OBJECT_TYPE.getOpcode(Opcodes.ISTORE), bi.binding.idx);
 				}
 			bindingLabels.put(bi, gen.mark());
 			}
@@ -6771,20 +6802,24 @@ public static Object macroexpand1(Object x) {
 		Var v = isMacro(op);
 		if(v != null)
 			{
-				try
+				// Do not check specs while inside clojure.spec
+				if(! "clojure/spec.clj".equals(SOURCE_PATH.deref()))
 					{
-						final Namespace checkns = Namespace.find(Symbol.intern("clojure.spec"));
-						if (checkns != null)
-							{
-								final Var check = Var.find(Symbol.intern("clojure.spec/macroexpand-check"));
-								if ((check != null) && (check.isBound()))
-								    check.applyTo(RT.cons(v, RT.list(form.next())));
-							}
-						Symbol.intern("clojure.spec");
-					}
-				catch(IllegalArgumentException e)
-					{
-					throw new CompilerException((String) SOURCE_PATH.deref(), lineDeref(), columnDeref(), e);
+					try
+						{
+							final Namespace checkns = Namespace.find(Symbol.intern("clojure.spec"));
+							if (checkns != null)
+								{
+									final Var check = Var.find(Symbol.intern("clojure.spec/macroexpand-check"));
+									if ((check != null) && (check.isBound()))
+										check.applyTo(RT.cons(v, RT.list(form.next())));
+								}
+							Symbol.intern("clojure.spec");
+						}
+					catch(IllegalArgumentException e)
+						{
+						throw new CompilerException((String) SOURCE_PATH.deref(), lineDeref(), columnDeref(), e);
+						}
 					}
 				try
 					{
@@ -7757,7 +7792,11 @@ static public class NewInstanceExpr extends ObjExpr{
 			//use array map to preserve ctor order
 			ret.closes = new PersistentArrayMap(closesvec);
 			ret.fields = fmap;
-			for(int i=fieldSyms.count()-1;i >= 0 && (((Symbol)fieldSyms.nth(i)).name.equals("__meta") || ((Symbol)fieldSyms.nth(i)).name.equals("__extmap"));--i)
+			for(int i=fieldSyms.count()-1;i >= 0 && (((Symbol)fieldSyms.nth(i)).name.equals("__meta")
+                                                     || ((Symbol)fieldSyms.nth(i)).name.equals("__extmap")
+                                                     || ((Symbol)fieldSyms.nth(i)).name.equals("__hash")
+                                                     || ((Symbol)fieldSyms.nth(i)).name.equals("__hasheq")
+                                                     );--i)
 				ret.altCtorDrops++;
 			}
 		//todo - set up volatiles
@@ -7901,8 +7940,35 @@ static public class NewInstanceExpr extends ObjExpr{
 			ctorgen.visitCode();
 			ctorgen.loadThis();
 			ctorgen.loadArgs();
-			for(int i=0;i<ret.altCtorDrops;i++)
-				ctorgen.visitInsn(Opcodes.ACONST_NULL);
+
+			ctorgen.visitInsn(Opcodes.ACONST_NULL); //__meta
+			ctorgen.visitInsn(Opcodes.ACONST_NULL); //__extmap
+			ctorgen.visitInsn(Opcodes.ICONST_0); //__hash
+			ctorgen.visitInsn(Opcodes.ICONST_0); //__hasheq
+
+			ctorgen.invokeConstructor(Type.getObjectType(COMPILE_STUB_PREFIX + "/" + ret.internalName),
+			                          new Method("<init>", Type.VOID_TYPE, ctorTypes));
+
+			ctorgen.returnValue();
+			ctorgen.endMethod();
+
+            // alt ctor no __hash, __hasheq
+			altCtorTypes = new Type[ctorTypes.length-2];
+			for(int i=0;i<altCtorTypes.length;i++)
+				altCtorTypes[i] = ctorTypes[i];
+
+			alt = new Method("<init>", Type.VOID_TYPE, altCtorTypes);
+			ctorgen = new GeneratorAdapter(ACC_PUBLIC,
+															alt,
+															null,
+															null,
+															cv);
+			ctorgen.visitCode();
+			ctorgen.loadThis();
+			ctorgen.loadArgs();
+
+			ctorgen.visitInsn(Opcodes.ICONST_0); //__hash
+			ctorgen.visitInsn(Opcodes.ICONST_0); //__hasheq
 
 			ctorgen.invokeConstructor(Type.getObjectType(COMPILE_STUB_PREFIX + "/" + ret.internalName),
 			                          new Method("<init>", Type.VOID_TYPE, ctorTypes));
@@ -7997,9 +8063,11 @@ static public class NewInstanceExpr extends ObjExpr{
 							}
 						}
 
-				mv.visitInsn(ACONST_NULL);
-				mv.visitVarInsn(ALOAD, 0);
+				mv.visitInsn(ACONST_NULL); //__meta
+				mv.visitVarInsn(ALOAD, 0); //__extmap
 				mv.visitMethodInsn(INVOKESTATIC, "clojure/lang/RT", "seqOrElse", "(Ljava/lang/Object;)Ljava/lang/Object;");
+				mv.visitInsn(ICONST_0); //__hash
+				mv.visitInsn(ICONST_0); //__hasheq
 				mv.visitMethodInsn(INVOKESPECIAL, className, "<init>", ctor.getDescriptor());
 				mv.visitInsn(ARETURN);
 				mv.visitMaxs(4+fieldCount, 1+fieldCount);

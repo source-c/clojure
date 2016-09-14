@@ -7,7 +7,7 @@
 ;   You must not remove this notice, or any other, from this software.
 
 (ns clojure.spec.gen
-    (:refer-clojure :exclude [boolean cat hash-map list map not-empty set vector
+    (:refer-clojure :exclude [boolean bytes cat hash-map list map not-empty set vector
                               char double int keyword symbol string uuid delay]))
 
 (alias 'c 'clojure.core)
@@ -89,8 +89,9 @@
         (fn [s] (c/list 'lazy-combinator s))
         syms)))
 
-(lazy-combinators hash-map list map not-empty set vector fmap elements
-                  bind choose fmap one-of such-that tuple sample return)
+(lazy-combinators hash-map list map not-empty set vector vector-distinct fmap elements
+                  bind choose fmap one-of such-that tuple sample return
+                  large-integer* double*)
 
 (defmacro ^:skip-wiki lazy-prim
   "Implementation macro, do not call directly."
@@ -111,7 +112,7 @@
         (fn [s] (c/list 'lazy-prim s))
         syms)))
 
-(lazy-prims any any-printable boolean char char-alpha char-alphanumeric char-ascii double
+(lazy-prims any any-printable boolean bytes char char-alpha char-alphanumeric char-ascii double
             int keyword keyword-ns large-integer ratio simple-type simple-type-printable
             string string-ascii string-alphanumeric symbol symbol-ns uuid)
 
@@ -122,16 +123,46 @@ gens, each of which should generate something sequential."
   (fmap #(apply concat %)
         (apply tuple gens)))
 
+(defn- qualified? [ident] (not (nil? (namespace ident))))
+
 (def ^:private
   gen-builtins
   (c/delay
    (let [simple (simple-type-printable)]
-     {number? (one-of [(large-integer) (double)])
+     {any? (one-of [(return nil) (any-printable)])
+      some? (such-that some? (any-printable))
+      number? (one-of [(large-integer) (double)])
       integer? (large-integer)
+      int? (large-integer)
+      pos-int? (large-integer* {:min 1})
+      neg-int? (large-integer* {:max -1})
+      nat-int? (large-integer* {:min 0})
       float? (double)
+      double? (double)
+      boolean? (boolean)
       string? (string-alphanumeric)
+      ident? (one-of [(keyword-ns) (symbol-ns)])
+      simple-ident? (one-of [(keyword) (symbol)])
+      qualified-ident? (such-that qualified? (one-of [(keyword-ns) (symbol-ns)]))
       keyword? (keyword-ns)
+      simple-keyword? (keyword)
+      qualified-keyword? (such-that qualified? (keyword-ns))
       symbol? (symbol-ns)
+      simple-symbol? (symbol)
+      qualified-symbol? (such-that qualified? (symbol-ns))
+      uuid? (uuid)
+      uri? (fmap #(java.net.URI/create (str "http://" % ".com")) (uuid))
+      bigdec? (fmap #(BigDecimal/valueOf %)
+                    (double* {:infinite? false :NaN? false}))
+      inst? (fmap #(java.util.Date. %)
+                  (large-integer))
+      seqable? (one-of [(return nil)
+                        (list simple)
+                        (vector simple)
+                        (map simple simple)
+                        (set simple)
+                        (string-alphanumeric)])
+      indexed? (vector simple)
       map? (map simple simple)
       vector? (vector simple)
       list? (list simple)
@@ -150,7 +181,8 @@ gens, each of which should generate something sequential."
       empty? (elements [nil '() [] {} #{}])
       associative? (one-of [(map simple simple) (vector simple)])
       sequential? (one-of [(list simple) (vector simple)])
-      ratio? (such-that ratio? (ratio))})))
+      ratio? (such-that ratio? (ratio))
+      bytes? (bytes)})))
 
 (defn gen-for-pred
   "Given a predicate, returns a built-in generator if one exists."
