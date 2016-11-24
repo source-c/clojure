@@ -1481,7 +1481,7 @@
                      (list `+ rep+)
                      (cons `cat (mapcat vector (c/or (seq ks) (repeat :_)) forms)))
             ::alt (if maybe
-                    (list `? maybe)
+                    (list `? (res maybe))
                     (cons `alt (mapcat vector ks forms)))
             ::rep (list (if splice `+ `*) forms)))))
 
@@ -1682,9 +1682,11 @@
      (specize* [s _] s)
        
      Spec
-     (conform* [_ f] (if (ifn? f)
-                       (if (identical? f (validate-fn f specs *fspec-iterations*)) f ::invalid)
-                       ::invalid))
+     (conform* [this f] (if argspec
+                          (if (ifn? f)
+                            (if (identical? f (validate-fn f specs *fspec-iterations*)) f ::invalid)
+                            ::invalid)
+                          (throw (Exception. (str "Can't conform fspec without args spec: " (pr-str (describe this)))))))
      (unform* [_ f] f)
      (explain* [_ path via in f]
                (if (ifn? f)
