@@ -16,10 +16,11 @@ import java.util.*;
 
 /**
  * Persistent Red Black Tree
- * Note that instances of this class are constant values
- * i.e. add/remove etc return new values
- * <p/>
- * See Okasaki, Kahrs, Larsen et al
+ *
+ * <p>Note that instances of this class are constant values
+ * i.e. add/remove etc return new values</p>
+ *
+ * <p>See Okasaki, Kahrs, Larsen et al</p>
  */
 
 public class PersistentTreeMap extends APersistentMap implements IObj, Reversible, Sorted, IKVReduce{
@@ -46,6 +47,8 @@ public PersistentTreeMap(){
 }
 
 public PersistentTreeMap withMeta(IPersistentMap meta){
+	if(_meta == meta)
+		return this;
 	return new PersistentTreeMap(meta, comp, tree, _count);
 }
 
@@ -331,6 +334,8 @@ public int doCompare(Object k1, Object k2){
 Node add(Node t, Object key, Object val, Box found){
 	if(t == null)
 		{
+		if(comp == RT.DEFAULT_COMPARATOR && !( key == null || (key instanceof Number) || (key instanceof Comparable)))
+			throw new ClassCastException("Default comparator requires nil, Number, or Comparable: " + key);
 		if(val == null)
 			return new Red(key);
 		return new RedVal(key, val);
@@ -845,6 +850,8 @@ static public class Seq extends ASeq{
 	}
 
 	public Obj withMeta(IPersistentMap meta){
+		if(meta() == meta)
+			return this;
 		return new Seq(meta, stack, asc, cnt);
 	}
 }

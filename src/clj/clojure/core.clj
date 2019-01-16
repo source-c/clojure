@@ -571,23 +571,6 @@
    :static true}
   [x] (instance? clojure.lang.Keyword x))
 
-(defn symbol
-  "Returns a Symbol with the given namespace and name."
-  {:tag clojure.lang.Symbol
-   :added "1.0"
-   :static true}
-  ([name] (if (symbol? name) name (clojure.lang.Symbol/intern name)))
-  ([ns name] (clojure.lang.Symbol/intern ns name)))
-
-(defn gensym
-  "Returns a new symbol with a unique name. If a prefix string is
-  supplied, the name is prefix# where # is some unique number. If
-  prefix is not supplied, the prefix is 'G__'."
-  {:added "1.0"
-   :static true}
-  ([] (gensym "G__"))
-  ([prefix-string] (. clojure.lang.Symbol (intern (str prefix-string (str (. clojure.lang.RT (nextID))))))))
-
 (defmacro cond
   "Takes a set of test/expr pairs. It evaluates each test one at a
   time.  If a test returns logical true, cond evaluates and returns
@@ -602,6 +585,31 @@
                 (throw (IllegalArgumentException.
                          "cond requires an even number of forms")))
             (cons 'clojure.core/cond (next (next clauses))))))
+
+(defn symbol
+  "Returns a Symbol with the given namespace and name. Arity-1 works
+  on strings, keywords, and vars."
+  {:tag clojure.lang.Symbol
+   :added "1.0"
+   :static true}
+  ([name]
+     (cond
+      (symbol? name) name
+      (instance? String name) (clojure.lang.Symbol/intern name)
+      (instance? clojure.lang.Var name) (.toSymbol ^clojure.lang.Var name)
+      (instance? clojure.lang.Keyword name) (.sym ^clojure.lang.Keyword name)
+      :else (throw (IllegalArgumentException. "no conversion to symbol"))))
+  ([ns name] (clojure.lang.Symbol/intern ns name)))
+
+(defn gensym
+  "Returns a new symbol with a unique name. If a prefix string is
+  supplied, the name is prefix# where # is some unique number. If
+  prefix is not supplied, the prefix is 'G__'."
+  {:added "1.0"
+   :static true}
+  ([] (gensym "G__"))
+  ([prefix-string] (. clojure.lang.Symbol (intern (str prefix-string (str (. clojure.lang.RT (nextID))))))))
+
 
 (defn keyword
   "Returns a Keyword with the given namespace and name.  Do not use :
@@ -859,9 +867,9 @@
 (defn zero?
   "Returns true if num is zero, else false"
   {
-   :inline (fn [x] `(. clojure.lang.Numbers (isZero ~x)))
+   :inline (fn [num] `(. clojure.lang.Numbers (isZero ~num)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (isZero x)))
+  [num] (. clojure.lang.Numbers (isZero num)))
 
 (defn count
   "Returns the number of items in the collection. (count nil) returns
@@ -1239,16 +1247,16 @@
 (defn pos?
   "Returns true if num is greater than zero, else false"
   {
-   :inline (fn [x] `(. clojure.lang.Numbers (isPos ~x)))
+   :inline (fn [num] `(. clojure.lang.Numbers (isPos ~num)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (isPos x)))
+  [num] (. clojure.lang.Numbers (isPos num)))
 
 (defn neg?
   "Returns true if num is less than zero, else false"
   {
-   :inline (fn [x] `(. clojure.lang.Numbers (isNeg ~x)))
+   :inline (fn [num] `(. clojure.lang.Numbers (isNeg ~num)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (isNeg x)))
+  [num] (. clojure.lang.Numbers (isNeg num)))
 
 (defn quot
   "quot[ient] of dividing numerator by denominator."
@@ -1419,11 +1427,6 @@
   "Return true if x is a Double"
   {:added "1.9"}
   [x] (instance? Double x))
-
-(defn bigdec?
-  "Return true if x is a BigDecimal"
-  {:added "1.9"}
-  [x] (instance? java.math.BigDecimal x))
 
 ;;
 
@@ -1599,6 +1602,13 @@
   [^clojure.lang.Named x]
     (. x (getNamespace)))
 
+(defn boolean
+  "Coerce to boolean"
+  {
+   :inline (fn  [x] `(. clojure.lang.RT (booleanCast ~x)))
+   :added "1.0"}
+  [x] (clojure.lang.RT/booleanCast x))
+
 (defn ident?
   "Return true if x is a symbol or keyword"
   {:added "1.9"}
@@ -1612,7 +1622,7 @@
 (defn qualified-ident?
   "Return true if x is a symbol or keyword with a namespace"
   {:added "1.9"}
-  [x] (and (ident? x) (namespace x) true))
+  [x] (boolean (and (ident? x) (namespace x) true)))
 
 (defn simple-symbol?
   "Return true if x is a symbol without a namespace"
@@ -1622,7 +1632,7 @@
 (defn qualified-symbol?
   "Return true if x is a symbol with a namespace"
   {:added "1.9"}
-  [x] (and (symbol? x) (namespace x) true))
+  [x] (boolean (and (symbol? x) (namespace x) true)))
 
 (defn simple-keyword?
   "Return true if x is a keyword without a namespace"
@@ -1632,7 +1642,7 @@
 (defn qualified-keyword?
   "Return true if x is a keyword with a namespace"
   {:added "1.9"}
-  [x] (and (keyword? x) (namespace x) true))
+  [x] (boolean (and (keyword? x) (namespace x) true)))
 
 (defmacro locking
   "Executes exprs in an implicit do, while holding the monitor of x.
@@ -2344,6 +2354,17 @@
   ([^clojure.lang.IAtom atom f x y] (.swap atom f x y))
   ([^clojure.lang.IAtom atom f x y & args] (.swap atom f x y args)))
 
+(defn swap-vals!
+  "Atomically swaps the value of atom to be:
+  (apply f current-value-of-atom args). Note that f may be called
+  multiple times, and thus should be free of side effects.
+  Returns [old new], the value of the atom before and after the swap."
+  {:added "1.9"}
+  (^clojure.lang.IPersistentVector [^clojure.lang.IAtom2 atom f] (.swapVals atom f))
+  (^clojure.lang.IPersistentVector [^clojure.lang.IAtom2 atom f x] (.swapVals atom f x))
+  (^clojure.lang.IPersistentVector [^clojure.lang.IAtom2 atom f x y] (.swapVals atom f x y))
+  (^clojure.lang.IPersistentVector [^clojure.lang.IAtom2 atom f x y & args] (.swapVals atom f x y args)))
+
 (defn compare-and-set!
   "Atomically sets the value of atom to newval if and only if the
   current value of the atom is identical to oldval. Returns true if
@@ -2358,6 +2379,12 @@
   {:added "1.0"
    :static true}
   [^clojure.lang.IAtom atom newval] (.reset atom newval))
+
+(defn reset-vals!
+  "Sets the value of atom to newval. Returns [old new], the value of the
+   atom before and after the reset."
+  {:added "1.9"}
+  ^clojure.lang.IPersistentVector [^clojure.lang.IAtom2 atom newval] (.resetVals atom newval))
 
 (defn set-validator!
   "Sets the validator-fn for a var/ref/agent/atom. validator-fn must be nil or a
@@ -2670,8 +2697,8 @@
   {:added "1.0"
    :static true}
   [pred coll]
-    (when (seq coll)
-      (or (pred (first coll)) (recur pred (next coll)))))
+    (when-let [s (seq coll)]
+      (or (pred (first s)) (recur pred (next s)))))
 
 (def
  ^{:tag Boolean
@@ -2765,7 +2792,7 @@
 
 (defn filter
   "Returns a lazy sequence of the items in coll for which
-  (pred item) returns true. pred must be free of side-effects.
+  (pred item) returns logical true. pred must be free of side-effects.
   Returns a transducer when no collection is provided."
   {:added "1.0"
    :static true}
@@ -2798,7 +2825,7 @@
 
 (defn remove
   "Returns a lazy sequence of the items in coll for which
-  (pred item) returns false. pred must be free of side-effects.
+  (pred item) returns logical false. pred must be free of side-effects.
   Returns a transducer when no collection is provided."
   {:added "1.0"
    :static true}
@@ -2860,7 +2887,7 @@
 
 (defn take-while
   "Returns a lazy sequence of successive items from coll while
-  (pred item) returns true. pred must be free of side-effects.
+  (pred item) returns logical true. pred must be free of side-effects.
   Returns a transducer when no collection is provided."
   {:added "1.0"
    :static true}
@@ -2908,8 +2935,8 @@
   "Return a lazy sequence of all but the last n (default 1) items in coll"
   {:added "1.0"
    :static true}
-  ([s] (drop-last 1 s))
-  ([n s] (map (fn [x _] x) s (drop n s))))
+  ([coll] (drop-last 1 coll))
+  ([n coll] (map (fn [x _] x) coll (drop n coll))))
 
 (defn take-last
   "Returns a seq of the last n items in coll.  Depending on the type
@@ -3086,7 +3113,7 @@
    (if (seq coll)
      (let [a (to-array coll)]
        (. java.util.Arrays (sort a comp))
-       (seq a))
+       (with-meta (seq a) (meta coll)))
      ())))
 
 (defn sort-by
@@ -3248,7 +3275,7 @@
   "Blocks the current thread (indefinitely!) until all actions
   dispatched thus far, from this thread or agent, to the agent(s) have
   occurred.  Will block on failed agents.  Will never return if
-  a failed agent is restarted with :clear-actions true."
+  a failed agent is restarted with :clear-actions true or shutdown-agents was called."
   {:added "1.0"
    :static true}
   [& agents]
@@ -3485,13 +3512,6 @@
   {:inline (fn  [x] `(. clojure.lang.RT (~(if *unchecked-math* 'uncheckedCharCast 'charCast) ~x)))
    :added "1.1"}
   [x] (. clojure.lang.RT (charCast x)))
-
-(defn boolean
-  "Coerce to boolean"
-  {
-   :inline (fn  [x] `(. clojure.lang.RT (booleanCast ~x)))
-   :added "1.0"}
-  [x] (clojure.lang.RT/booleanCast x))
 
 (defn unchecked-byte
   "Coerce to byte. Subject to rounding or truncation."
@@ -3747,6 +3767,32 @@
   ([opts stream]
    (. clojure.lang.LispReader (read stream opts))))
 
+(defn read+string
+  "Like read, and taking the same args. stream must be a LineNumberingPushbackReader.
+  Returns a vector containing the object read and the (whitespace-trimmed) string read."
+  {:added "1.10"}
+  ([] (read+string *in*))
+  ([stream] (read+string stream true nil))
+  ([stream eof-error? eof-value] (read+string stream eof-error? eof-value false))
+  ([^clojure.lang.LineNumberingPushbackReader stream eof-error? eof-value recursive?]
+   (try
+     (.captureString stream)
+     (let [o (read stream eof-error? eof-value recursive?)
+           s (.trim (.getString stream))]
+       [o s])
+     (catch Throwable ex
+       (.getString stream)
+       (throw ex))))
+  ([opts ^clojure.lang.LineNumberingPushbackReader stream]
+   (try
+     (.captureString stream)
+     (let [o (read opts stream)
+           s (.trim (.getString stream))]
+       [o s])
+     (catch Throwable ex
+       (.getString stream)
+       (throw ex)))))
+
 (defn read-line
   "Reads the next line from stream that is the current value of *in* ."
   {:added "1.0"
@@ -3814,9 +3860,11 @@
     (let [gx (gensym)]
       `(let [~gx ~x]
          ~@(map (fn [f]
-                  (if (seq? f)
-                    `(~(first f) ~gx ~@(next f))
-                    `(~f ~gx)))
+                  (with-meta
+                    (if (seq? f)
+                      `(~(first f) ~gx ~@(next f))
+                      `(~f ~gx))
+                    (meta f)))
                 forms)
          ~gx)))
 
@@ -4722,14 +4770,24 @@
      (apply println xs)))
 
 (import clojure.lang.ExceptionInfo clojure.lang.IExceptionInfo)
+
+(defn ^:private elide-top-frames
+  [^Throwable ex class-name]
+  (let [tr (.getStackTrace ex)]
+    (doto ex
+      (.setStackTrace
+        (when tr
+          (into-array StackTraceElement
+            (drop-while #(= class-name (.getClassName ^StackTraceElement %1)) tr)))))))
+
 (defn ex-info
   "Create an instance of ExceptionInfo, a RuntimeException subclass
    that carries a map of additional data."
   {:added "1.4"}
   ([msg map]
-     (ExceptionInfo. msg map))
+    (elide-top-frames (ExceptionInfo. msg map) "clojure.core$ex_info"))
   ([msg map cause]
-     (ExceptionInfo. msg map cause)))
+    (elide-top-frames (ExceptionInfo. msg map cause) "clojure.core$ex_info")))
 
 (defn ex-data
   "Returns exception data (a map) if ex is an IExceptionInfo.
@@ -4738,6 +4796,22 @@
   [ex]
   (when (instance? IExceptionInfo ex)
     (.getData ^IExceptionInfo ex)))
+
+(defn ex-message
+  "Returns the message attached to ex if ex is a Throwable.
+  Otherwise returns nil."
+  {:added "1.10"}
+  [ex]
+  (when (instance? Throwable ex)
+    (.getMessage ^Throwable ex)))
+
+(defn ex-cause
+  "Returns the cause of ex if ex is a Throwable.
+  Otherwise returns nil."
+  {:added "1.10"}
+  [ex]
+  (when (instance? Throwable ex)
+    (.getCause ^Throwable ex)))
 
 (defmacro assert
   "Evaluates expr and throws an exception if it does not evaluate to
@@ -4913,22 +4987,44 @@
   (^String [^String s start end] (. s (substring start end))))
 
 (defn max-key
-  "Returns the x for which (k x), a number, is greatest."
+  "Returns the x for which (k x), a number, is greatest.
+
+  If there are multiple such xs, the last one is returned."
   {:added "1.0"
    :static true}
   ([k x] x)
   ([k x y] (if (> (k x) (k y)) x y))
   ([k x y & more]
-   (reduce1 #(max-key k %1 %2) (max-key k x y) more)))
+   (let [kx (k x) ky (k y)
+         [v kv] (if (> kx ky) [x kx] [y ky])]
+     (loop [v v kv kv more more]
+       (if more
+         (let [w (first more)
+               kw (k w)]
+           (if (>= kw kv)
+             (recur w kw (next more))
+             (recur v kv (next more))))
+         v)))))
 
 (defn min-key
-  "Returns the x for which (k x), a number, is least."
+  "Returns the x for which (k x), a number, is least.
+
+  If there are multiple such xs, the last one is returned."
   {:added "1.0"
    :static true}
   ([k x] x)
   ([k x y] (if (< (k x) (k y)) x y))
   ([k x y & more]
-   (reduce1 #(min-key k %1 %2) (min-key k x y) more)))
+   (let [kx (k x) ky (k y)
+         [v kv] (if (< kx ky) [x kx] [y ky])]
+     (loop [v v kv kv more more]
+       (if more
+         (let [w (first more)
+               kw (k w)]
+           (if (<= kw kv)
+             (recur w kw (next more))
+             (recur v kv (next more))))
+         v)))))
 
 (defn distinct
   "Returns a lazy sequence of the elements of coll with duplicates removed.
@@ -5157,10 +5253,10 @@
   array ret."
   {:added "1.0"}
   [a idx ret expr]
-  `(let [a# ~a
+  `(let [a# ~a l# (alength a#)
          ~ret (aclone a#)]
      (loop  [~idx 0]
-       (if (< ~idx  (alength a#))
+       (if (< ~idx  l#)
          (do
            (aset ~ret ~idx ~expr)
            (recur (unchecked-inc ~idx)))
@@ -5763,7 +5859,7 @@
           exception (Exception. message)
           raw-trace (.getStackTrace exception)
           boring? #(not= (.getMethodName ^StackTraceElement %) "doInvoke")
-          trace (into-array (drop 2 (drop-while boring? raw-trace)))]
+          trace (into-array StackTraceElement (drop 2 (drop-while boring? raw-trace)))]
       (.setStackTrace exception trace)
       (throw (clojure.lang.Compiler$CompilerException.
               *file*
@@ -5928,9 +6024,11 @@
   'require loads a lib by loading its root resource. The root resource path
   is derived from the lib name in the following manner:
   Consider a lib named by the symbol 'x.y.z; it has the root directory
-  <classpath>/x/y/, and its root resource is <classpath>/x/y/z.clj. The root
-  resource should contain code to create the lib's namespace (usually by using
-  the ns macro) and load any additional lib resources.
+  <classpath>/x/y/, and its root resource is <classpath>/x/y/z.clj, or
+  <classpath>/x/y/z.cljc if <classpath>/x/y/z.clj does not exist. The
+  root resource should contain code to create the lib's
+  namespace (usually by using the ns macro) and load any additional
+  lib resources.
 
   Libspecs
 
@@ -5971,6 +6069,26 @@
 
   [& args]
   (apply load-libs :require args))
+
+(defn- serialized-require
+  "Like 'require', but serializes loading.
+  Interim function preferred over 'require' for known asynchronous loads.
+  Future changes may make these equivalent."
+  {:added "1.10"}
+  [& args]
+  (locking clojure.lang.RT/REQUIRE_LOCK
+    (apply require args)))
+
+(defn requiring-resolve
+  "Resolves namespace-qualified sym per 'resolve'. If initial resolve
+fails, attempts to require sym's namespace and retries."
+  {:added "1.10"}
+  [sym]
+  (if (qualified-symbol? sym)
+    (or (resolve sym)
+        (do (-> sym namespace symbol serialized-require)
+            (resolve sym)))
+    (throw (IllegalArgumentException. (str "Not a qualified symbol: " sym)))))
 
 (defn use
   "Like 'require, but also refers to each lib's namespace using
@@ -6649,7 +6767,15 @@
 (load "core_deftype")
 (load "core/protocols")
 (load "gvec")
-(load "instant")
+
+(defmacro ^:private when-class [class-name & body]
+  `(try
+     (Class/forName ^String ~class-name)
+     ~@body
+     (catch ClassNotFoundException _#)))
+
+(when-class "java.sql.Timestamp"
+  (load "instant"))
 
 (defprotocol Inst
   (inst-ms* [inst]))
@@ -6657,12 +6783,6 @@
 (extend-protocol Inst
   java.util.Date
   (inst-ms* [inst] (.getTime ^java.util.Date inst)))
-
-;; conditionally extend to Instant on Java 8+
-(try
-  (Class/forName "java.time.Instant")
-  (load "core_instant18")
-  (catch ClassNotFoundException cnfe))
 
 (defn inst-ms
   "Return the number of milliseconds since January 1, 1970, 00:00:00 GMT"
@@ -6675,6 +6795,10 @@
   {:added "1.9"}
   [x]
   (satisfies? Inst x))
+
+(extend-protocol clojure.core/Inst
+  java.time.Instant
+  (inst-ms* [inst] (.toEpochMilli ^java.time.Instant inst)))
 
 (load "uuid")
 
@@ -6796,7 +6920,7 @@
 
 (defn filterv
   "Returns a vector of the items in coll for which
-  (pred item) returns true. pred must be free of side-effects."
+  (pred item) returns logical true. pred must be free of side-effects."
   {:added "1.4"
    :static true}
   [pred coll]
@@ -6818,7 +6942,8 @@
 (defn slurp
   "Opens a reader on f and reads all its contents, returning a string.
   See clojure.java.io/reader for a complete list of supported arguments."
-  {:added "1.0"}
+  {:added "1.0"
+   :tag String}
   ([f & opts]
      (let [opts (normalize-slurp-opts opts)
            sw (java.io.StringWriter.)]
@@ -7010,7 +7135,7 @@
 
 (defn flatten
   "Takes any nested combination of sequential things (lists, vectors,
-  etc.) and returns their contents as a single, flat sequence.
+  etc.) and returns their contents as a single, flat lazy sequence.
   (flatten nil) returns an empty sequence."
   {:added "1.2"
    :static true}
@@ -7073,7 +7198,7 @@
         (let [fst (first s)
               fv (f fst)
               run (cons fst (take-while #(= fv (f %)) (next s)))]
-          (cons run (partition-by f (seq (drop (count run) s)))))))))
+          (cons run (partition-by f (lazy-seq (drop (count run) s)))))))))
 
 (defn frequencies
   "Returns a map from distinct items in coll to the number of times
@@ -7625,15 +7750,17 @@
 (def ^{:added "1.4"} default-data-readers
   "Default map of data reader functions provided by Clojure. May be
   overridden by binding *data-readers*."
-  {'inst #'clojure.instant/read-instant-date
-   'uuid #'clojure.uuid/default-uuid-reader})
+  (merge
+    {'uuid #'clojure.uuid/default-uuid-reader}
+    (when-class "java.sql.Timestamp"
+      {'inst #'clojure.instant/read-instant-date})))
 
 (def ^{:added "1.4" :dynamic true} *data-readers*
   "Map from reader tag symbols to data reader Vars.
 
   When Clojure starts, it searches for files named 'data_readers.clj'
-  at the root of the classpath. Each such file must contain a literal
-  map of symbols, like this:
+  and 'data_readers.cljc' at the root of the classpath. Each such file
+  must contain a literal map of symbols, like this:
 
       {foo/bar my.project.foo/bar
        foo/baz my.project/baz}
@@ -7654,7 +7781,7 @@
   Reader tags without namespace qualifiers are reserved for
   Clojure. Default reader tags are defined in
   clojure.core/default-data-readers but may be overridden in
-  data_readers.clj or by rebinding this Var."
+  data_readers.clj, data_readers.cljc, or by rebinding this Var."
   {})
 
 (def ^{:added "1.5" :dynamic true} *default-data-reader-fn* 
@@ -7719,3 +7846,47 @@
   "Return true if x is a java.net.URI"
   {:added "1.9"}
   [x] (instance? java.net.URI x))
+
+(defonce ^:private tapset (atom #{}))
+(defonce ^:private ^java.util.concurrent.ArrayBlockingQueue tapq (java.util.concurrent.ArrayBlockingQueue. 1024))
+
+(defonce ^:private tap-loop
+  (delay
+   (doto (Thread.
+          #(let [t (.take tapq)
+                 x (if (identical? ::tap-nil t) nil t)
+                 taps @tapset]
+             (doseq [tap taps]
+               (try
+                 (tap x)
+                 (catch Throwable ex)))
+             (recur))
+          "clojure.core/tap-loop")
+     (.setDaemon true)
+     (.start))))
+
+(defn add-tap
+  "adds f, a fn of one argument, to the tap set. This function will be called with anything sent via tap>.
+  This function may (briefly) block (e.g. for streams), and will never impede calls to tap>,
+  but blocking indefinitely may cause tap values to be dropped.
+  Remember f in order to remove-tap"
+  {:added "1.10"}
+  [f]
+  (force tap-loop)
+  (swap! tapset conj f)
+  nil)
+
+(defn remove-tap
+  "Remove f from the tap set."
+  {:added "1.10"}
+  [f]
+  (swap! tapset disj f)
+  nil)
+
+(defn tap>
+  "sends x to any taps. Will not block. Returns true if there was room in the queue,
+  false if not (dropped)."
+  {:added "1.10"}
+  [x]
+  (force tap-loop)
+  (.offer tapq (if (nil? x) ::tap-nil x)))

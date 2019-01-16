@@ -72,6 +72,7 @@
   (all-pairs-equal #'= [(byte 2) (short 2) (int 2) (long 2)
                         (bigint 2) (biginteger 2)])
   (all-pairs-equal #'= [(float 2.0) (double 2.0)])
+  (all-pairs-equal #'= [(float 0.0) (double 0.0) (float -0.0) (double -0.0)])
   (all-pairs-equal #'= [2.0M 2.00M])
   (all-pairs-equal #'= [(float 1.5) (double 1.5)])
   (all-pairs-equal #'= [1.50M 1.500M])
@@ -85,12 +86,13 @@
                                      (bigint 2)
                                      (double 2.0) 2.0M 2.00M])
   (all-pairs-hash-consistent-with-= [(/ 3 2) (double 1.5) 1.50M 1.500M])
-  (all-pairs-hash-consistent-with-= [(double 0.0) 0.0M 0.00M])
+  (all-pairs-hash-consistent-with-= [(double -0.0) (double 0.0) -0.0M -0.00M 0.0M 0.00M (float -0.0) (float 0.0)])
 
   ;; == tests for numerical equality, returning true even for numbers
   ;; in different categories.
   (all-pairs-equal #'== [(byte 0) (short 0) (int 0) (long 0)
                          (bigint 0) (biginteger 0)
+                         (float -0.0) (double -0.0) -0.0M -0.00M
                          (float 0.0) (double 0.0) 0.0M 0.00M])
   (all-pairs-equal #'== [(byte 2) (short 2) (int 2) (long 2)
                          (bigint 2) (biginteger 2)
@@ -732,6 +734,57 @@ Math/pow overflows to Infinity."
                  (+ (* q d) r)
                  (unchecked-add (unchecked-multiply q d) r))))))
 
+(deftest unchecked-inc-overflow
+  (testing "max value overflows to min value"
+    (is (= Long/MIN_VALUE (unchecked-inc Long/MAX_VALUE)))
+    (is (= Long/MIN_VALUE (unchecked-inc (Long/valueOf Long/MAX_VALUE))))))
+
+(deftest unchecked-dec-overflow
+  (testing "min value overflows to max value"
+    (is (= Long/MAX_VALUE (unchecked-dec Long/MIN_VALUE)))
+    (is (= Long/MAX_VALUE (unchecked-dec (Long/valueOf Long/MIN_VALUE))))))
+
+(deftest unchecked-negate-overflow
+  (testing "negating min value overflows to min value itself"
+    (is (= Long/MIN_VALUE (unchecked-negate Long/MIN_VALUE)))
+    (is (= Long/MIN_VALUE (unchecked-negate (Long/valueOf Long/MIN_VALUE))))))
+
+(deftest unchecked-add-overflow
+  (testing "max value overflows to min value"
+    (is (= Long/MIN_VALUE (unchecked-add Long/MAX_VALUE 1)))
+    (is (= Long/MIN_VALUE (unchecked-add Long/MAX_VALUE (Long/valueOf 1))))
+    (is (= Long/MIN_VALUE (unchecked-add (Long/valueOf Long/MAX_VALUE) 1)))
+    (is (= Long/MIN_VALUE (unchecked-add (Long/valueOf Long/MAX_VALUE) (Long/valueOf 1)))))
+  (testing "adding min value to min value results in zero"
+    (is (= 0 (unchecked-add Long/MIN_VALUE Long/MIN_VALUE)))
+    (is (= 0 (unchecked-add Long/MIN_VALUE (Long/valueOf Long/MIN_VALUE))))
+    (is (= 0 (unchecked-add (Long/valueOf Long/MIN_VALUE) Long/MIN_VALUE)))
+    (is (= 0 (unchecked-add (Long/valueOf Long/MIN_VALUE) (Long/valueOf Long/MIN_VALUE))))))
+
+(deftest unchecked-subtract-overflow
+  (testing "min value overflows to max-value"
+    (is (= Long/MAX_VALUE (unchecked-subtract Long/MIN_VALUE 1)))
+    (is (= Long/MAX_VALUE (unchecked-subtract Long/MIN_VALUE (Long/valueOf 1))))
+    (is (= Long/MAX_VALUE (unchecked-subtract (Long/valueOf Long/MIN_VALUE) 1)))
+    (is (= Long/MAX_VALUE (unchecked-subtract (Long/valueOf Long/MIN_VALUE) (Long/valueOf 1)))))
+  (testing "negating min value overflows to min value itself"
+    (is (= Long/MIN_VALUE (unchecked-subtract 0 Long/MIN_VALUE)))
+    (is (= Long/MIN_VALUE (unchecked-subtract 0 (Long/valueOf Long/MIN_VALUE))))
+    (is (= Long/MIN_VALUE (unchecked-subtract (Long/valueOf 0) Long/MIN_VALUE)))
+    (is (= Long/MIN_VALUE (unchecked-subtract (Long/valueOf 0) (Long/valueOf Long/MIN_VALUE))))))
+
+(deftest unchecked-multiply-overflow
+  (testing "two times max value results in -2"
+    (is (= -2 (unchecked-multiply Long/MAX_VALUE 2)))
+    (is (= -2 (unchecked-multiply Long/MAX_VALUE (Long/valueOf 2))))
+    (is (= -2 (unchecked-multiply (Long/valueOf Long/MAX_VALUE) 2)))
+    (is (= -2 (unchecked-multiply (Long/valueOf Long/MAX_VALUE) (Long/valueOf 2)))))
+  (testing "two times min value results in 0"
+    (is (= 0 (unchecked-multiply Long/MIN_VALUE 2)))
+    (is (= 0 (unchecked-multiply Long/MIN_VALUE (Long/valueOf 2))))
+    (is (= 0 (unchecked-multiply (Long/valueOf Long/MIN_VALUE) 2)))
+    (is (= 0 (unchecked-multiply (Long/valueOf Long/MIN_VALUE) (Long/valueOf 2))))))
+
 (defmacro check-warn-on-box [warn? form]
   `(do (binding [*unchecked-math* :warn-on-boxed]
                 (is (= ~warn?
@@ -807,3 +860,73 @@ Math/pow overflows to Infinity."
        (<= 1000 Double/NaN) (<= 1000 (Double. Double/NaN))
        (> 1000 Double/NaN) (> 1000 (Double. Double/NaN))
        (>= 1000 Double/NaN) (>= 1000 (Double. Double/NaN))))
+
+(deftest test-nan-as-operand
+  (testing "All numeric operations with NaN as an operand produce NaN as a result"
+    (let [nan Double/NaN
+          onan (cast Object Double/NaN)]
+      (are [x] (Double/isNaN x)
+          (+ nan 1)
+          (+ nan 0)
+          (+ nan 0.0)
+          (+ 1 nan)
+          (+ 0 nan)
+          (+ 0.0 nan)
+          (+ nan nan)
+          (- nan 1)
+          (- nan 0)
+          (- nan 0.0)
+          (- 1 nan)
+          (- 0 nan)
+          (- 0.0 nan)
+          (- nan nan)
+          (* nan 1)
+          (* nan 0)
+          (* nan 0.0)
+          (* 1 nan)
+          (* 0 nan)
+          (* 0.0 nan)
+          (* nan nan)
+          (/ nan 1)
+          (/ nan 0)
+          (/ nan 0.0)
+          (/ 1 nan)
+          (/ 0 nan)
+          (/ 0.0 nan)
+          (/ nan nan)
+          (+ onan 1)
+          (+ onan 0)
+          (+ onan 0.0)
+          (+ 1 onan)
+          (+ 0 onan)
+          (+ 0.0 onan)
+          (+ onan onan)
+          (- onan 1)
+          (- onan 0)
+          (- onan 0.0)
+          (- 1 onan)
+          (- 0 onan)
+          (- 0.0 onan)
+          (- onan onan)
+          (* onan 1)
+          (* onan 0)
+          (* onan 0.0)
+          (* 1 onan)
+          (* 0 onan)
+          (* 0.0 onan)
+          (* onan onan)
+          (/ onan 1)
+          (/ onan 0)
+          (/ onan 0.0)
+          (/ 1 onan)
+          (/ 0 onan)
+          (/ 0.0 onan)
+          (/ onan onan)
+          (+ nan onan)
+          (+ onan nan)
+          (- nan onan)
+          (- onan nan)
+          (* nan onan)
+          (* onan nan)
+          (/ nan onan)
+          (/ onan nan) ))))

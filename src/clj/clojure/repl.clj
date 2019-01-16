@@ -12,7 +12,7 @@
   ^{:author "Chris Houser, Christophe Grand, Stephen Gilardi, Michel Salim"
     :doc "Utilities meant to be used interactively at the REPL"}
   clojure.repl
-  (:require [clojure.spec :as spec])
+  (:require [clojure.spec.alpha :as spec])
   (:import (java.io LineNumberReader InputStreamReader PushbackReader)
            (clojure.lang RT Reflector)))
 
@@ -135,7 +135,7 @@ itself (not its value) is returned. The reader macro #'x expands to (var x)."}})
   {:added "1.0"}
   [name]
   (if-let [special-name ('{& fn catch try finally try} name)]
-    (#'print-doc (#'special-doc special-name))
+    `(#'print-doc (#'special-doc '~special-name))
     (cond
       (special-doc-map name) `(#'print-doc (#'special-doc '~name))
       (keyword? name) `(#'print-doc {:spec '~name :doc '~(spec/describe name)})
@@ -250,6 +250,9 @@ str-or-pattern."
          (pst (root-cause e) e-or-depth))))
   ([^Throwable e depth]
      (binding [*out* *err*]
+       (when (#{:read-source :macro-syntax-check :macroexpansion :compile-syntax-check :compilation}
+               (-> e ex-data :clojure.error/phase))
+         (println "Note: The following stack trace applies to the reader or compiler, your code was not executed."))
        (println (str (-> e class .getSimpleName) " "
                      (.getMessage e)
                      (when-let [info (ex-data e)] (str " " (pr-str info)))))

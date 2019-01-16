@@ -101,7 +101,7 @@
              [0xffff] "\\uffff"
              [4 49] "\\u00041"))
       (testing (str "Errors reading string literals from " (name source))
-        (are [err msg form] (thrown-with-msg? err msg
+        (are [err msg form] (thrown-with-cause-msg? err msg
                               (read-from source f (str "\"" form "\"")))
              Exception #"EOF while reading string" "\\"
              Exception #"Unsupported escape character: \\o" "\\o"
@@ -213,6 +213,10 @@
   (is (instance? Double -1.0))
   (is (instance? Double -1.))
 
+  (is (= Double/POSITIVE_INFINITY ##Inf))
+  (is (= Double/NEGATIVE_INFINITY ##-Inf))
+  (is (and (instance? Double ##NaN) (.isNaN ##NaN)))
+
   ; Read BigDecimal
   (is (instance? BigDecimal 9223372036854775808M))
   (is (instance? BigDecimal -9223372036854775809M))
@@ -304,7 +308,7 @@
              (char 0xe000) "\\ue000"
              (char 0xffff) "\\uffff"))
       (testing (str "Errors reading char literals from " (name source))
-        (are [err msg form] (thrown-with-msg? err msg (read-from source f form))
+        (are [err msg form] (thrown-with-cause-msg? err msg (read-from source f form))
              Exception #"EOF while reading character" "\\"
              Exception #"Unsupported character: \\00" "\\00"
              Exception #"Unsupported character: \\0009" "\\0009"
@@ -533,7 +537,7 @@
         (is (not= (read-string s) (read-string s2)))))
     (binding [*data-readers* {'inst read-instant-date}]
       (testing "read-instant-date should truncate at milliseconds"
-        (is (= (read-string s) (read-string s2)) (read-string s3)))))
+        (is (= (read-string s) (read-string s2) (read-string s3))))))
   (let [s "#inst \"2010-11-12T03:14:15.123+05:00\""
         s2 "#inst \"2010-11-11T22:14:15.123Z\""]
     (binding [*data-readers* {'inst read-instant-date}]
@@ -727,24 +731,52 @@
   (is (= #::s{1 nil, :a nil, :a/b nil, :_/d nil}
          #::s  {1 nil, :a nil, :a/b nil, :_/d nil}
          {1 nil, :clojure.string/a nil, :a/b nil, :d nil}))
-  (is (= #::clojure.core{1 nil, :a nil, :a/b nil, :_/d nil} {1 nil, :clojure.core/a nil, :a/b nil, :d nil}))
   (is (= (read-string "#:a{b 1 b/c 2}") {'a/b 1, 'b/c 2}))
   (is (= (binding [*ns* (the-ns 'clojure.test-clojure.reader)] (read-string "#::{b 1, b/c 2, _/d 3}")) {'clojure.test-clojure.reader/b 1, 'b/c 2, 'd 3}))
-  (is (= (binding [*ns* (the-ns 'clojure.test-clojure.reader)] (read-string "#::s{b 1, b/c 2, _/d 3}")) {'clojure.string/b 1, 'b/c 2, 'd 3}))
-  (is (= (read-string "#::clojure.core{b 1, b/c 2, _/d 3}") {'clojure.core/b 1, 'b/c 2, 'd 3})))
+  (is (= (binding [*ns* (the-ns 'clojure.test-clojure.reader)] (read-string "#::s{b 1, b/c 2, _/d 3}")) {'clojure.string/b 1, 'b/c 2, 'd 3})))
 
 (deftest namespaced-map-errors
   (are [err msg form] (thrown-with-msg? err msg (read-string form))
                       Exception #"Invalid token" "#:::"
                       Exception #"Namespaced map literal must contain an even number of forms" "#:s{1}"
                       Exception #"Namespaced map must specify a valid namespace" "#:s/t{1 2}"
-                      Exception #"Namespaced map literal must contain an even number of forms" "#::clojure.core{1}"
-                      Exception #"Namespaced map must specify a valid namespace" "#::clojure.core/t{1 2}"
                       Exception #"Unknown auto-resolved namespace alias" "#::BOGUS{1 2}"
-                      Exception #"Namespaced map must specify a namespace" "#:: clojure.core{:a 1}"
-                      Exception #"Namespaced map must specify a namespace" "#: clojure.core{:a 1}"))
+                      Exception #"Namespaced map must specify a namespace" "#: s{:a 1}"
+                      Exception #"Duplicate key: :user/a" "#::{:a 1 :a 2}"
+                      Exception #"Duplicate key: user/a" "#::{a 1 a 2}"))
 
 (deftest namespaced-map-edn
   (is (= {1 1, :a/b 2, :b/c 3, :d 4}
          (edn/read-string "#:a{1 1, :b 2, :b/c 3, :_/d 4}")
          (edn/read-string "#:a {1 1, :b 2, :b/c 3, :_/d 4}"))))
+
+(deftest invalid-symbol-value
+  (is (thrown-with-msg? Exception #"Invalid token" (read-string "##5")))
+  (is (thrown-with-msg? Exception #"Invalid token" (edn/read-string "##5")))
+  (is (thrown-with-msg? Exception #"Unknown symbolic value" (read-string "##Foo")))
+  (is (thrown-with-msg? Exception #"Unknown symbolic value" (edn/read-string "##Foo"))))
+
+(defn str->lnpr
+  [s]
+  (-> s (java.io.StringReader.) (clojure.lang.LineNumberingPushbackReader.)))
+
+(deftest test-read+string
+  (let [[r s] (read+string (str->lnpr "[:foo  100]"))]
+    (is (= [:foo 100] r))
+    (is (= "[:foo  100]" s)))
+
+  (let [[r s] (read+string {:read-cond :allow :features #{:y}} (str->lnpr "#?(:x :foo :y :bar)"))]
+    (is (= :bar r))
+    (is (= "#?(:x :foo :y :bar)" s))))
+
+(deftest t-Explicit-line-column-numbers
+  (is (= {:line 42 :column 99}
+         (-> "^{:line 42 :column 99} (1 2)" read-string meta (select-keys [:line :column]))))
+
+  (are [l c s] (= {:line l :column c} (-> s str->lnpr read meta (select-keys [:line :column])))
+    42 99 "^{:line 42 :column 99} (1 2)"
+    1 99 "^{:column 99} (1 2)")
+
+  (eval (-> "^{:line 42 :column 99} (defn explicit-line-numbering [])" str->lnpr read))
+  (is (= {:line 42 :column 99}
+         (-> 'explicit-line-numbering resolve meta (select-keys [:line :column])))))

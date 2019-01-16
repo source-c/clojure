@@ -23,6 +23,8 @@
 
 (defmacro m1 [a] `(inc ~a))
 
+(defmacro m2 [] (assoc))
+
 (deftest arity-exception
   ;; IllegalArgumentException is pre-1.3
   (is (thrown-with-msg? IllegalArgumentException #"Wrong number of args \(1\) passed to"
@@ -35,7 +37,24 @@
         (macroexpand `(m1 1 2))))
   (is (thrown-with-msg? ArityException #"\Q/f2:+><->!#%&*|b\E"
         (f2:+><->!#%&*|b 1 2))
-        "ArityException messages should demunge function names"))
+      "ArityException messages should demunge function names")
+  (is (try
+        (macroexpand `(m2))
+        (throw (RuntimeException. "fail"))
+        (catch ArityException e
+          (is (= 0 (.-actual e))))))
+ (is (try
+       (macroexpand `(m2 5))
+       (throw (RuntimeException. "fail"))
+       (catch ArityException e
+         (is (= 1 (.-actual e)))))))
+
+(deftest compile-error-examples
+  (are [form errtype re] (thrown-with-cause-msg? errtype re (eval form))
+       '(Long/parseLong) Exception #"No matching method.*taking 0 args"
+       '(Long/parseLong :a :b :c) Exception #"No matching method.*taking 3 args")
+  (are [form errtype re] (thrown-with-msg? errtype re (eval form))
+       '(.jump "foo" 1) Exception #"No matching method.*taking 1 arg"))
 
 (deftest assert-arg-messages
   ; used to ensure that error messages properly use local names for macros
@@ -43,9 +62,9 @@
   
   ; would have used `are` here, but :line meta on &form doesn't survive successive macroexpansions
   (doseq [[msg-regex-str form] [["renamed-with-open" "(renamed-with-open [a])"]]]
-    (is (thrown-with-msg? IllegalArgumentException
-                          (re-pattern (format msg-regex-str *ns*))
-                          (macroexpand (read-string form))))))
+    (is (thrown-with-cause-msg? clojure.lang.Compiler$CompilerException
+                                (re-pattern (format msg-regex-str *ns*))
+                                (macroexpand (read-string form))))))
 
 (deftest extract-ex-data
   (try

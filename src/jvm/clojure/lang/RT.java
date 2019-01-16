@@ -36,7 +36,7 @@ static final public Boolean F = Boolean.FALSE;//Keyword.intern(Symbol.intern(nul
 static final public String LOADER_SUFFIX = "__init";
 
 //simple-symbol->class
-final static IPersistentMap DEFAULT_IMPORTS = map(
+final static public IPersistentMap DEFAULT_IMPORTS = map(
 //												  Symbol.intern("RT"), "clojure.lang.RT",
 //                                                  Symbol.intern("Num"), "clojure.lang.Num",
 //                                                  Symbol.intern("Symbol"), "clojure.lang.Symbol",
@@ -177,6 +177,7 @@ static Object readTrueFalseUnknown(String s){
 	return Keyword.intern(null, "unknown");
 }
 
+static public final Object REQUIRE_LOCK = new Object();
 static public final Namespace CLOJURE_NS = Namespace.findOrCreate(Symbol.intern("clojure.core"));
 //static final Namespace USER_NS = Namespace.findOrCreate(Symbol.intern("user"));
 final static public Var OUT =
@@ -198,6 +199,7 @@ final static public Var DEFAULT_DATA_READERS = Var.intern(CLOJURE_NS, Symbol.int
 final static public Var SUPPRESS_READ = Var.intern(CLOJURE_NS, Symbol.intern("*suppress-read*"), null).setDynamic();
 final static public Var ASSERT = Var.intern(CLOJURE_NS, Symbol.intern("*assert*"), T).setDynamic();
 final static public Var MATH_CONTEXT = Var.intern(CLOJURE_NS, Symbol.intern("*math-context*"), null).setDynamic();
+static Keyword EVAL_FILE_KEY = Keyword.intern("clojure.core", "eval-file");
 static Keyword LINE_KEY = Keyword.intern(null, "line");
 static Keyword COLUMN_KEY = Keyword.intern(null, "column");
 static Keyword FILE_KEY = Keyword.intern(null, "file");
@@ -227,6 +229,7 @@ final static Var PRINT_READABLY = Var.intern(CLOJURE_NS, Symbol.intern("*print-r
 final static Var PRINT_DUP = Var.intern(CLOJURE_NS, Symbol.intern("*print-dup*"), F).setDynamic();
 final static Var WARN_ON_REFLECTION = Var.intern(CLOJURE_NS, Symbol.intern("*warn-on-reflection*"), F).setDynamic();
 final static Var ALLOW_UNRESOLVED_VARS = Var.intern(CLOJURE_NS, Symbol.intern("*allow-unresolved-vars*"), F).setDynamic();
+final static Var READER_RESOLVER = Var.intern(CLOJURE_NS, Symbol.intern("*reader-resolver*"), null).setDynamic();
 
 final static Var IN_NS_VAR = Var.intern(CLOJURE_NS, Symbol.intern("in-ns"), F);
 final static Var NS_VAR = Var.intern(CLOJURE_NS, Symbol.intern("ns"), F);
@@ -299,6 +302,8 @@ static public void addURL(Object url) throws MalformedURLException{
 }
 
 public static boolean checkSpecAsserts = Boolean.getBoolean("clojure.spec.check-asserts");
+public static boolean instrumentMacros = ! Boolean.getBoolean("clojure.spec.skip-macros");
+static volatile boolean CHECK_SPECS = false;
 
 static{
 	Keyword arglistskw = Keyword.intern(null, "arglists");
@@ -335,6 +340,8 @@ static{
 	catch(Exception e) {
 		throw Util.sneakyThrow(e);
 	}
+
+	CHECK_SPECS = RT.instrumentMacros;
 }
 
 static public Keyword keyword(String ns, String name){
@@ -424,11 +431,12 @@ static public void load(String scriptbase) throws IOException, ClassNotFoundExce
 static public void load(String scriptbase, boolean failIfNotFound) throws IOException, ClassNotFoundException{
 	String classfile = scriptbase + LOADER_SUFFIX + ".class";
 	String cljfile = scriptbase + ".clj";
+	String cljcfile = scriptbase + ".cljc";
 	String scriptfile = cljfile;
 	URL classURL = getResource(baseLoader(),classfile);
 	URL cljURL = getResource(baseLoader(), scriptfile);
 	if(cljURL == null) {
-		scriptfile = scriptbase + ".cljc";
+		scriptfile = cljcfile;
 		cljURL = getResource(baseLoader(), scriptfile);
 	}
 	boolean loaded = false;
@@ -455,14 +463,12 @@ static public void load(String scriptbase, boolean failIfNotFound) throws IOExce
 			loadResourceScript(RT.class, scriptfile);
 	}
 	else if(!loaded && failIfNotFound)
-		throw new FileNotFoundException(String.format("Could not locate %s or %s on classpath.%s", classfile, cljfile,
+		throw new FileNotFoundException(String.format("Could not locate %s, %s or %s on classpath.%s", classfile, cljfile, cljcfile,
 			scriptbase.contains("_") ? " Please check that namespaces with dashes use underscores in the Clojure file name." : ""));
 }
 
 static void doInit() throws ClassNotFoundException, IOException{
 	load("clojure/core");
-	load("clojure/spec");
-	load("clojure/core/specs");
 
 	Var.pushThreadBindings(
 			RT.mapUniqueKeys(CURRENT_NS, CURRENT_NS.deref(),
@@ -768,6 +774,10 @@ static Object getFrom(Object coll, Object key){
 			return nth(coll, n);
 		return null;
 	}
+	else if(coll instanceof ITransientSet) {
+		ITransientSet set = (ITransientSet) coll;
+		return set.get(key);
+	}
 
 	return null;
 }
@@ -796,6 +806,12 @@ static Object getFrom(Object coll, Object key, Object notFound){
 	else if(key instanceof Number && (coll instanceof String || coll.getClass().isArray())) {
 		int n = ((Number) key).intValue();
 		return n >= 0 && n < count(coll) ? nth(coll, n) : notFound;
+	}
+	else if(coll instanceof ITransientSet) {
+		ITransientSet set = (ITransientSet) coll;
+		if(set.contains(key))
+			return set.get(key);
+		return notFound;
 	}
 	return notFound;
 
@@ -826,6 +842,10 @@ static public Object contains(Object coll, Object key){
 		int n = ((Number) key).intValue();
 		return n >= 0 && n < count(coll);
 	}
+	else if(coll instanceof ITransientSet)
+		return ((ITransientSet)coll).contains(key) ? T : F;
+	else if(coll instanceof ITransientAssociative2)
+		return (((ITransientAssociative2)coll).containsKey(key)) ? T : F;
 	throw new IllegalArgumentException("contains? not supported on type: " + coll.getClass().getName());
 }
 
@@ -834,12 +854,16 @@ static public Object find(Object coll, Object key){
 		return null;
 	else if(coll instanceof Associative)
 		return ((Associative) coll).entryAt(key);
-	else {
+	else if(coll instanceof Map) {
 		Map m = (Map) coll;
 		if(m.containsKey(key))
 			return MapEntry.create(key, m.get(key));
 		return null;
 	}
+	else if(coll instanceof ITransientAssociative2) {
+		return ((ITransientAssociative2) coll).entryAt(key);
+	}
+	throw new IllegalArgumentException("find not supported on type: " + coll.getClass().getName());
 }
 
 //takes a seq of key,val,key,val
@@ -1560,7 +1584,7 @@ static public double uncheckedDoubleCast(double x){
 }
 
 static public IPersistentMap map(Object... init){
-	if(init == null)
+	if(init == null || init.length == 0)
 		return PersistentArrayMap.EMPTY;
 	else if(init.length <= PersistentArrayMap.HASHTABLE_THRESHOLD)
 		return PersistentArrayMap.createWithCheck(init);

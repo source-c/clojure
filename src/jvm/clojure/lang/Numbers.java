@@ -39,9 +39,11 @@ static interface Ops{
 
 	public Number add(Number x, Number y);
 	public Number addP(Number x, Number y);
+	public Number unchecked_add(Number x, Number y);
 
 	public Number multiply(Number x, Number y);
 	public Number multiplyP(Number x, Number y);
+	public Number unchecked_multiply(Number x, Number y);
 
 	public Number divide(Number x, Number y);
 
@@ -57,12 +59,15 @@ static interface Ops{
 
 	public Number negate(Number x);
 	public Number negateP(Number x);
+	public Number unchecked_negate(Number x);
 
 	public Number inc(Number x);
 	public Number incP(Number x);
+	public Number unchecked_inc(Number x);
 
 	public Number dec(Number x);
 	public Number decP(Number x);
+	public Number unchecked_dec(Number x);
 }
 
 static abstract class OpsP implements Ops{
@@ -70,7 +75,15 @@ static abstract class OpsP implements Ops{
 		return add(x, y);
 	}
 
+	public Number unchecked_add(Number x, Number y){
+		return add(x, y);
+	}
+
 	public Number multiplyP(Number x, Number y){
+		return multiply(x, y);
+	}
+
+	public Number unchecked_multiply(Number x, Number y){
 		return multiply(x, y);
 	}
 
@@ -78,11 +91,23 @@ static abstract class OpsP implements Ops{
 		return negate(x);
 	}
 
+	public Number unchecked_negate(Number x){
+		return negate(x);
+	}
+
 	public Number incP(Number x){
 		return inc(x);
 	}
 
+	public Number unchecked_inc(Number x){
+		return inc(x);
+	}
+
 	public Number decP(Number x){
+		return dec(x);
+	}
+
+	public Number unchecked_dec(Number x){
 		return dec(x);
 	}
 
@@ -153,6 +178,11 @@ static public Number multiplyP(Object x, Object y){
 }
 
 static public Number divide(Object x, Object y){
+	if (isNaN(x)){
+		return (Number)x;
+	} else if(isNaN(y)){
+		return (Number)y;
+	}
 	Ops yops = ops(y);
 	if(yops.isZero((Number)y))
 		throw new ArithmeticException("Divide by zero");
@@ -463,6 +493,10 @@ final static class LongOps implements Ops{
 		return num(ret);
 	}
 
+	final public Number unchecked_add(Number x, Number y){
+		return num(Numbers.unchecked_add(x.longValue(), y.longValue()));
+	}
+
 	final public Number multiply(Number x, Number y){
 		return num(Numbers.multiply(x.longValue(), y.longValue()));
 	}
@@ -476,6 +510,11 @@ final static class LongOps implements Ops{
 			return BIGINT_OPS.multiply(x, y);
 		return num(ret);
 	}
+
+	final public Number unchecked_multiply(Number x, Number y){
+		return num(Numbers.unchecked_multiply(x.longValue(), y.longValue()));
+	}
+
 	static long gcd(long u, long v){
 		while(v != 0)
 			{
@@ -541,6 +580,12 @@ final static class LongOps implements Ops{
 			return num(-val);
 		return BigInt.fromBigInteger(BigInteger.valueOf(val).negate());
 	}
+
+	final public Number unchecked_negate(Number x){
+		long val = x.longValue();
+		return num(Numbers.unchecked_minus(val));
+	}
+
 	public Number inc(Number x){
 		long val = x.longValue();
 		return num(Numbers.inc(val));
@@ -553,6 +598,11 @@ final static class LongOps implements Ops{
 		return BIGINT_OPS.inc(x);
 	}
 
+	public Number unchecked_inc(Number x){
+		long val = x.longValue();
+		return num(Numbers.unchecked_inc(val));
+	}
+
 	public Number dec(Number x){
 		long val = x.longValue();
 		return num(Numbers.dec(val));
@@ -563,6 +613,11 @@ final static class LongOps implements Ops{
 		if(val > Long.MIN_VALUE)
 			return num(val - 1);
 		return BIGINT_OPS.dec(x);
+	}
+
+	public Number unchecked_dec(Number x){
+		long val = x.longValue();
+		return num(Numbers.unchecked_dec(val));
 	}
 }
 
@@ -1033,21 +1088,18 @@ static Ops ops(Object x){
 }
 
 @WarnBoxedMath(false)
-static int hasheq(Number x){
-	Class xc = x.getClass();
-
-	if(xc == Long.class
-		|| xc == Integer.class
-		|| xc == Short.class
-		|| xc == Byte.class
-		|| (xc == BigInteger.class && lte(x, Long.MAX_VALUE) && gte(x,Long.MIN_VALUE)))
-		{
+static int hasheqFrom(Number x, Class xc){
+	if(xc == Integer.class
+			|| xc == Short.class
+			|| xc == Byte.class
+			|| (xc == BigInteger.class && lte(x, Long.MAX_VALUE) && gte(x,Long.MIN_VALUE)))
+	{
 		long lpart = x.longValue();
 		return Murmur3.hashLong(lpart);
 		//return (int) (lpart ^ (lpart >>> 32));
-		}
+	}
 	if(xc == BigDecimal.class)
-		{
+	{
 		// stripTrailingZeros() to make all numerically equal
 		// BigDecimal values come out the same before calling
 		// hashCode.  Special check for 0 because
@@ -1056,12 +1108,35 @@ static int hasheq(Number x){
 		if (isZero(x))
 			return BigDecimal.ZERO.hashCode();
 		else
-			{
+		{
 			BigDecimal tmp = ((BigDecimal) x).stripTrailingZeros();
 			return tmp.hashCode();
-			}
 		}
+	}
+	if(xc == Float.class && x.equals(-0.0f))
+	{
+		return 0;  // match 0.0f
+	}
 	return x.hashCode();
+}
+
+@WarnBoxedMath(false)
+static int hasheq(Number x){
+	Class xc = x.getClass();
+
+	if(xc == Long.class)
+	{
+		long lpart = x.longValue();
+		return Murmur3.hashLong(lpart);
+		//return (int) (lpart ^ (lpart >>> 32));
+	}
+	if(xc == Double.class)
+	{
+		if(x.equals(-0.0))
+			return 0;  // match 0.0
+		return x.hashCode();
+	}
+	return hasheqFrom(x, xc);
 }
 
 static Category category(Object x){
@@ -1745,12 +1820,30 @@ static public long unchecked_minus(long x){return -x;}
 static public long unchecked_inc(long x){return x + 1;}
 static public long unchecked_dec(long x){return x - 1;}
 
-static public Number unchecked_add(Object x, Object y){return add(x,y);}
-static public Number unchecked_minus(Object x, Object y){return minus(x,y);}
-static public Number unchecked_multiply(Object x, Object y){return multiply(x,y);}
-static public Number unchecked_minus(Object x){return minus(x);}
-static public Number unchecked_inc(Object x){return inc(x);}
-static public Number unchecked_dec(Object x){return dec(x);}
+static public Number unchecked_add(Object x, Object y){
+	return ops(x).combine(ops(y)).unchecked_add((Number)x, (Number)y);
+}
+
+static public Number unchecked_minus(Object x, Object y){
+	Ops yops = ops(y);
+	return ops(x).combine(yops).unchecked_add((Number)x, yops.unchecked_negate((Number)y));
+}
+
+static public Number unchecked_multiply(Object x, Object y){
+	return ops(x).combine(ops(y)).unchecked_multiply((Number)x, (Number)y);
+}
+
+static public Number unchecked_minus(Object x){
+	return ops(x).unchecked_negate((Number)x);
+}
+
+static public Number unchecked_inc(Object x){
+	return ops(x).unchecked_inc((Number)x);
+}
+
+static public Number unchecked_dec(Object x){
+	return ops(x).unchecked_dec((Number)x);
+}
 
 static public double unchecked_add(double x, double y){return add(x,y);}
 static public double unchecked_minus(double x, double y){return minus(x,y);}
@@ -1773,12 +1866,12 @@ static public double unchecked_add(long x, double y){return add(x,y);}
 static public double unchecked_minus(long x, double y){return minus(x,y);}
 static public double unchecked_multiply(long x, double y){return multiply(x,y);}
 
-static public Number unchecked_add(long x, Object y){return add(x,y);}
-static public Number unchecked_minus(long x, Object y){return minus(x,y);}
-static public Number unchecked_multiply(long x, Object y){return multiply(x,y);}
-static public Number unchecked_add(Object x, long y){return add(x,y);}
-static public Number unchecked_minus(Object x, long y){return minus(x,y);}
-static public Number unchecked_multiply(Object x, long y){return multiply(x,y);}
+static public Number unchecked_add(long x, Object y){return unchecked_add((Object)x,y);}
+static public Number unchecked_minus(long x, Object y){return unchecked_minus((Object)x,y);}
+static public Number unchecked_multiply(long x, Object y){return unchecked_multiply((Object)x,y);}
+static public Number unchecked_add(Object x, long y){return unchecked_add(x,(Object)y);}
+static public Number unchecked_minus(Object x, long y){return unchecked_minus(x,(Object)y);}
+static public Number unchecked_multiply(Object x, long y){return unchecked_multiply(x,(Object)y);}
 
 static public Number quotient(double x, Object y){return quotient((Object)x,y);}
 static public Number quotient(Object x, double y){return quotient(x,(Object)y);}

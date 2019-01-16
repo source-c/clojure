@@ -12,19 +12,93 @@
 
 package clojure.lang;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class Reflector{
 
+private static final MethodHandle CAN_ACCESS_PRED;
+
+// Java 8 is oldest JDK supported
+private static boolean isJava8() {
+	return System.getProperty("java.vm.specification.version").equals("1.8");
+}
+
+static {
+	MethodHandle pred = null;
+	try {
+		if (! isJava8())
+			pred = MethodHandles.lookup().findVirtual(Method.class, "canAccess", MethodType.methodType(boolean.class, Object.class));
+	} catch (Throwable t) {
+		Util.sneakyThrow(t);
+	}
+	CAN_ACCESS_PRED = pred;
+}
+
+private static boolean canAccess(Method m, Object target) {
+	if (CAN_ACCESS_PRED != null) {
+		// JDK9+ use j.l.r.AccessibleObject::canAccess, which respects module rules
+		try {
+			return (boolean) CAN_ACCESS_PRED.invoke(m, target);
+		} catch (Throwable t) {
+			throw Util.sneakyThrow(t);
+		}
+	} else {
+		// JDK 8
+		return true;
+	}
+}
+
+private static Collection<Class> interfaces(Class c) {
+	Set<Class> interfaces = new HashSet<Class>();
+	Deque<Class> toWalk = new ArrayDeque<Class>();
+	toWalk.addAll(Arrays.asList(c.getInterfaces()));
+	Class iface = toWalk.poll();
+	while (iface != null) {
+		interfaces.add(iface);
+		toWalk.addAll(Arrays.asList(iface.getInterfaces()));
+		iface = toWalk.poll();
+	}
+	return interfaces;
+}
+
+private static Method tryFindMethod(Class c, Method m) {
+	if(c == null) return null;
+	try {
+		return c.getMethod(m.getName(), m.getParameterTypes());
+	} catch(NoSuchMethodException e) {
+		return null;
+	}
+}
+
+private static Method toAccessibleSuperMethod(Method m, Object target) {
+	Method selected = m;
+	while(selected != null) {
+		if(canAccess(selected, target)) return selected;
+		selected = tryFindMethod(selected.getDeclaringClass().getSuperclass(), m);
+	}
+
+	Collection<Class> interfaces = interfaces(m.getDeclaringClass());
+	for(Class c : interfaces) {
+		selected = tryFindMethod(c, m);
+		if(selected != null) return selected;
+	}
+	return null;
+}
+
 public static Object invokeInstanceMethod(Object target, String methodName, Object[] args) {
 	Class c = target.getClass();
-	List methods = getMethods(c, args.length, methodName, false);
+	List methods = getMethods(c, args.length, methodName, false).stream()
+					.map(method -> toAccessibleSuperMethod(method, target))
+					.filter(method -> (method != null))
+					.collect(Collectors.toList());
 	return invokeMatchingMethod(methodName, methods, target, args);
 }
 
@@ -40,8 +114,8 @@ private static RuntimeException throwCauseOrElseException(Exception e) {
 	throw Util.sneakyThrow(e);
 }
 
-private static String noMethodReport(String methodName, Object target){
-	 return "No matching method found: " + methodName
+private static String noMethodReport(String methodName, Object target, Object[] args){
+	 return "No matching method " + methodName + " found taking " + args.length + " args"
 			+ (target==null?"":" for " + target.getClass());
 }
 static Object invokeMatchingMethod(String methodName, List methods, Object target, Object[] args)
@@ -50,7 +124,7 @@ static Object invokeMatchingMethod(String methodName, List methods, Object targe
 	Object[] boxedArgs = null;
 	if(methods.isEmpty())
 		{
-		throw new IllegalArgumentException(noMethodReport(methodName,target));
+		throw new IllegalArgumentException(noMethodReport(methodName,target,args));
 		}
 	else if(methods.size() == 1)
 		{
@@ -77,13 +151,13 @@ static Object invokeMatchingMethod(String methodName, List methods, Object targe
 		m = foundm;
 		}
 	if(m == null)
-		throw new IllegalArgumentException(noMethodReport(methodName,target));
+		throw new IllegalArgumentException(noMethodReport(methodName,target,args));
 
-	if(!Modifier.isPublic(m.getDeclaringClass().getModifiers()))
+	if(!Modifier.isPublic(m.getDeclaringClass().getModifiers()) || !canAccess(m, target))
 		{
 		//public method of non-public class, try to find it in hierarchy
 		Method oldm = m;
-		m = getAsMethodOfPublicBase(target.getClass(), m);
+		m = getAsMethodOfAccessibleBase(target.getClass(), m, target);
 		if(m == null)
 			throw new IllegalArgumentException("Can't call public method of non-public class: " +
 			                                    oldm.toString());
@@ -99,6 +173,7 @@ static Object invokeMatchingMethod(String methodName, List methods, Object targe
 
 }
 
+// DEPRECATED - replaced by getAsMethodOfAccessibleBase()
 public static Method getAsMethodOfPublicBase(Class c, Method m){
 	for(Class iface : c.getInterfaces())
 		{
@@ -123,6 +198,7 @@ public static Method getAsMethodOfPublicBase(Class c, Method m){
 	return getAsMethodOfPublicBase(sc, m);
 }
 
+// DEPRECATED - replaced by isAccessibleMatch()
 public static boolean isMatch(Method lhs, Method rhs) {
 	if(!lhs.getName().equals(rhs.getName())
 			|| !Modifier.isPublic(lhs.getDeclaringClass().getModifiers()))
@@ -145,6 +221,55 @@ public static boolean isMatch(Method lhs, Method rhs) {
 				}
 			}
 		return match;
+}
+
+public static Method getAsMethodOfAccessibleBase(Class c, Method m, Object target){
+	for(Class iface : c.getInterfaces())
+	{
+		for(Method im : iface.getMethods())
+		{
+			if(isAccessibleMatch(im, m, target))
+			{
+				return im;
+			}
+		}
+	}
+	Class sc = c.getSuperclass();
+	if(sc == null)
+		return null;
+	for(Method scm : sc.getMethods())
+	{
+		if(isAccessibleMatch(scm, m, target))
+		{
+			return scm;
+		}
+	}
+	return getAsMethodOfAccessibleBase(sc, m, target);
+}
+
+public static boolean isAccessibleMatch(Method lhs, Method rhs, Object target) {
+	if(!lhs.getName().equals(rhs.getName())
+			|| !Modifier.isPublic(lhs.getDeclaringClass().getModifiers())
+			|| !canAccess(lhs, target))
+	{
+		return false;
+	}
+
+	Class[] types1 = lhs.getParameterTypes();
+	Class[] types2 = rhs.getParameterTypes();
+	if(types1.length != types2.length)
+		return false;
+
+	boolean match = true;
+	for (int i=0; i<types1.length; ++i)
+	{
+		if(!types1[i].isAssignableFrom(types2[i]))
+		{
+			match = false;
+			break;
+		}
+	}
+	return match;
 }
 
 public static Object invokeConstructor(Class c, Object[] args) {
@@ -369,7 +494,7 @@ static public Field getField(Class c, String name, boolean getStatics){
 	return null;
 }
 
-static public List getMethods(Class c, int arity, String name, boolean getStatics){
+static public List<Method> getMethods(Class c, int arity, String name, boolean getStatics){
 	Method[] allmethods = c.getMethods();
 	ArrayList methods = new ArrayList();
 	ArrayList bridgeMethods = new ArrayList();

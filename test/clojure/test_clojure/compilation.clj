@@ -57,7 +57,9 @@
 
 (deftest test-compiler-resolution
   (testing "resolve nonexistent class create should return nil (assembla #262)"
-    (is (nil? (resolve 'NonExistentClass.)))))
+    (is (nil? (resolve 'NonExistentClass.))))
+  (testing "resolve nonexistent class should return nil"
+    (is (nil? (resolve 'NonExistentClass.Name)))))
 
 (deftest test-no-recur-across-try
   (testing "don't recur to function from inside try"
@@ -146,10 +148,10 @@
     (is (= 'java.lang.Integer (-> arglists second meta :tag)))))
 
 (deftest CLJ-1232-return-type-not-imported
-  (is (thrown-with-msg? Compiler$CompilerException #"Unable to resolve classname: Closeable"
-                        (eval '(defn a ^Closeable []))))
-  (is (thrown-with-msg? Compiler$CompilerException #"Unable to resolve classname: Closeable"
-                        (eval '(defn a (^Closeable []))))))
+  (is (thrown-with-cause-msg? Compiler$CompilerException #"Unable to resolve classname: Closeable"
+                              (eval '(defn a ^Closeable []))))
+  (is (thrown-with-cause-msg? Compiler$CompilerException #"Unable to resolve classname: Closeable"
+                              (eval '(defn a (^Closeable []))))))
 
 (defn ^String hinting-conflict ^Integer [])
 
@@ -325,12 +327,14 @@
 (deftest clj-1568
   (let [compiler-fails-at?
           (fn [row col source]
-            (try
-              (Compiler/load (java.io.StringReader. source) (name (gensym "clj-1568.example-")) "clj-1568.example")
-              nil
-              (catch Compiler$CompilerException e
-                (re-find (re-pattern (str "^.*:" row ":" col "\\)$"))
-                         (.getMessage e)))))]
+            (let [path (name (gensym "clj-1568.example-"))]
+              (try
+                (Compiler/load (java.io.StringReader. source) path "clj-1568.example")
+                nil
+                (catch Compiler$CompilerException e
+                  (let [data (ex-data e)]
+                    (= [path row col]
+                      [(:clojure.error/source data) (:clojure.error/line data) (:clojure.error/column data)]))))))]
     (testing "with error in the initial form"
       (are [row col source] (compiler-fails-at? row col source)
            ;; note that the spacing of the following string is important
@@ -354,6 +358,33 @@
   ;; throws an exception on failure
   (is (eval `(fn [] ~(CLJ1399. 1)))))
 
+(deftest CLJ-1250-this-clearing
+  (testing "clearing during try/catch/finally"
+    (let [closed-over-in-catch (let [x :foo]
+                                 (fn []
+                                   (try
+                                     (throw (Exception. "boom"))
+                                     (catch Exception e
+                                       x)))) ;; x should remain accessible to the fn
+
+          a (atom nil)
+          closed-over-in-finally (fn []
+                                   (try
+                                     :ret
+                                     (finally
+                                       (reset! a :run))))]
+      (is (= :foo (closed-over-in-catch)))
+      (is (= :ret (closed-over-in-finally)))
+      (is (= :run @a))))
+  (testing "no clearing when loop not in return context"
+    (let [x (atom 5)
+          bad (fn []
+                (loop [] (System/getProperties))
+                (swap! x dec)
+                (when (pos? @x)
+                  (recur)))]
+      (is (nil? (bad))))))
+
 (deftest CLJ-1586-lazyseq-literals-preserve-metadata
   (should-not-reflect (eval (list '.substring (with-meta (concat '(identity) '("foo")) {:tag 'String}) 0))))
 
@@ -372,7 +403,7 @@
 ;; See CLJ-1846
 (deftest incorrect-primitive-type-hint-throws
   ;; invalid primitive type hint
-  (is (thrown-with-msg? Compiler$CompilerException #"Cannot coerce long to int"
+  (is (thrown-with-cause-msg? Compiler$CompilerException #"Cannot coerce long to int"
         (load-string "(defn returns-long ^long [] 1) (Integer/bitCount ^int (returns-long))")))
   ;; correct casting instead
   (is (= 1 (load-string "(defn returns-long ^long [] 1) (Integer/bitCount (int (returns-long)))"))))
@@ -395,3 +426,14 @@
       ;; eventually call `load` and reset called?.
       (require 'clojure.repl :reload))
     (is @called?)))
+
+(deftest clj-1714
+  (testing "CLJ-1714 Classes shouldn't have their static initialisers called simply by type hinting or importing"
+    ;; ClassWithFailingStaticInitialiser will throw if its static initialiser is called
+    (is (eval '(fn [^compilation.ClassWithFailingStaticInitialiser c])))
+    (is (eval '(import (compilation ClassWithFailingStaticInitialiser))))))
+
+(deftest CLJ-2284
+  (testing "CLJ-2284 Can call static methods on interfaces"
+    (is (= 42 (compilation.JDK8InterfaceMethods/staticMethod0 42)))
+    (is (= "test" (compilation.JDK8InterfaceMethods/staticMethod1 "test")))))

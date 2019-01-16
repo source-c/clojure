@@ -17,14 +17,14 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 
 /**
- * Simple implementation of persistent map on an array
- * <p/>
- * Note that instances of this class are constant values
- * i.e. add/remove etc return new values
- * <p/>
- * Copies array on every change, so only appropriate for _very_small_ maps
- * <p/>
- * null keys and values are ok, but you won't be able to distinguish a null value via valAt - use contains/entryAt
+ * <p>Simple implementation of persistent map on an array</p>
+ *
+ * <p>Note that instances of this class are constant values
+ * i.e. add/remove etc return new values</p>
+ *
+ * <p>Copies array on every change, so only appropriate for _very_small_ maps</p>
+ *
+ * <p>null keys and values are ok, but you won't be able to distinguish a null value via valAt - use contains/entryAt</p>
  */
 
 public class PersistentArrayMap extends APersistentMap implements IObj, IEditableCollection, IMapIterable, IKVReduce{
@@ -51,6 +51,8 @@ protected PersistentArrayMap(){
 }
 
 public PersistentArrayMap withMeta(IPersistentMap meta){
+	if(meta() == meta)
+		return this;
 	return new PersistentArrayMap(meta, array);
 }
 
@@ -177,7 +179,7 @@ public IPersistentMap assocEx(Object key, Object val) {
 		}
 	else //didn't have key, grow
 		{
-		if(array.length > HASHTABLE_THRESHOLD)
+		if(array.length >= HASHTABLE_THRESHOLD)
 			return createHT(array).assocEx(key, val);
 		newArray = new Object[array.length + 2];
 		if(array.length > 0)
@@ -200,7 +202,7 @@ public IPersistentMap assoc(Object key, Object val){
 		}
 	else //didn't have key, grow
 		{
-		if(array.length > HASHTABLE_THRESHOLD)
+		if(array.length >= HASHTABLE_THRESHOLD)
 			return createHT(array).assoc(key, val);
 		newArray = new Object[array.length + 2];
 		if(array.length > 0)
@@ -328,6 +330,8 @@ static class Seq extends ASeq implements Counted{
 	}
 
 	public Obj withMeta(IPersistentMap meta){
+		if(meta() == meta)
+			return this;
 		return new Seq(meta, array, i);
 	}
 }

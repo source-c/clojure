@@ -323,7 +323,7 @@
     (first (sorted-set 1 nil)) nil
     (first (sorted-set nil 2)) nil
     (first #{#{}}) #{}
-    (first (sorted-set #{} nil)) nil
+    (first (sorted-set [] nil)) nil
     ;(first (sorted-set #{} 2 nil)) nil
 
     ; map
@@ -392,7 +392,7 @@
     (next (sorted-set 1 nil)) '(1)
     (next (sorted-set nil 2)) '(2)
     (next #{#{}}) nil
-    (next (sorted-set #{} nil)) '(#{})
+    (next (sorted-set [] nil)) '([])
     ;(next (sorted-set #{} 2 nil)) #{}
 
     ; map
@@ -451,7 +451,7 @@
       (last (sorted-set 1 nil)) 1
       (last (sorted-set nil 2)) 2
       (last #{#{}}) #{}
-      (last (sorted-set #{} nil)) #{}
+      (last (sorted-set [] nil)) []
       ;(last (sorted-set #{} 2 nil)) nil
 
       ; map
@@ -1287,7 +1287,10 @@
        ["a" "bb" "cccc" "dd" "eee" "f" "" "hh"]
        '("a" "bb" "cccc" "dd" "eee" "f" "" "hh"))
   (is (=(partition-by #{\a \e \i \o \u} "abcdefghijklm")
-       [[\a] [\b \c \d] [\e] [\f \g \h] [\i] [\j \k \l \m]])))
+        [[\a] [\b \c \d] [\e] [\f \g \h] [\i] [\j \k \l \m]]))
+  ;; CLJ-1764 regression test
+  (is (=(first (second (partition-by zero? (range))))
+        1)))
 
 (deftest test-frequencies
   (are [expected test-seq] (= (frequencies test-seq) expected)
@@ -1361,3 +1364,7 @@
     (doseq [i (range 100)]
       (is (= s1 (concat (subseq s2 < i) (subseq s2 >= i))))
       (is (= (reverse s1) (concat (rsubseq s2 >= i) (rsubseq s2 < i)))))))
+
+(deftest test-sort-retains-meta
+  (is (= {:a true} (meta (sort (with-meta (range 10) {:a true})))))
+  (is (= {:a true} (meta (sort-by :a (with-meta (seq [{:a 5} {:a 2} {:a 3}]) {:a true}))))))

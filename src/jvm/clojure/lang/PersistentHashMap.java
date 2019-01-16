@@ -277,6 +277,8 @@ static int mask(int hash, int shift){
 }
 
 public PersistentHashMap withMeta(IPersistentMap meta){
+	if(_meta == meta)
+		return this;
 	return new PersistentHashMap(meta, count, root, hasNull, nullValue);
 }
 
@@ -609,6 +611,8 @@ final static class ArrayNode implements INode{
 		}
 
 		public Obj withMeta(IPersistentMap meta) {
+			if(meta() == meta)
+				return this;
 			return new Seq(meta, nodes, i, s);
 		}
 
@@ -750,9 +754,11 @@ final static class BitmapIndexedNode implements INode{
 				return null;
 			return new BitmapIndexedNode(null, bitmap ^ bit, removePair(array, idx));
 		}
-		if(Util.equiv(key, keyOrNull))
-			// TODO: collapse
+		if(Util.equiv(key, keyOrNull)) {
+			if (bitmap == bit)
+				return null;
 			return new BitmapIndexedNode(null, bitmap ^ bit, removePair(array, idx));
+		}
 		return this;
 	}
 	
@@ -966,18 +972,16 @@ final static class HashCollisionNode implements INode{
 		int idx = findIndex(key);
 		if(idx < 0)
 			return null;
-		if(Util.equiv(key, array[idx]))
+		else
 			return (IMapEntry) MapEntry.create(array[idx], array[idx+1]);
-		return null;
 	}
 
 	public Object find(int shift, int hash, Object key, Object notFound){
 		int idx = findIndex(key);
 		if(idx < 0)
 			return notFound;
-		if(Util.equiv(key, array[idx]))
+		else
 			return array[idx+1];
-		return notFound;
 	}
 
 	public ISeq nodeSeq(){
@@ -1337,6 +1341,8 @@ static final class NodeSeq extends ASeq {
 	}
 
 	public Obj withMeta(IPersistentMap meta) {
+		if(meta() == meta)
+			return this;
 		return new NodeSeq(meta, array, i, s);
 	}
 

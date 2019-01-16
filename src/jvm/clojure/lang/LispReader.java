@@ -107,6 +107,7 @@ static
 
 
 	dispatchMacros['^'] = new MetaReader();
+	dispatchMacros['#'] = new SymbolicValueReader();
 	dispatchMacros['\''] = new VarReader();
 	dispatchMacros['"'] = new RegexReader();
 	dispatchMacros['('] = new FnReader();
@@ -118,6 +119,13 @@ static
 	dispatchMacros['?'] = new ConditionalReader();
 	dispatchMacros[':'] = new NamespaceMapReader();
 	}
+
+public static interface Resolver{
+    Symbol currentNS();
+    Symbol resolveClass(Symbol sym);
+    Symbol resolveAlias(Symbol sym);
+    Symbol resolveVar(Symbol sym);
+}
 
 static boolean isWhitespace(int ch){
 	return Character.isWhitespace(ch) || ch == ',';
@@ -135,14 +143,24 @@ static void unread(PushbackReader r, int ch) {
 			}
 }
 
-public static class ReaderException extends RuntimeException{
-	final int line;
-	final int column;
+public static class ReaderException extends RuntimeException implements IExceptionInfo{
+	public final int line;
+	public final int column;
+	public final Object data;
+
+    final static public String ERR_NS = "clojure.error";
+	final static public Keyword ERR_LINE = Keyword.intern(ERR_NS, "line");
+	final static public Keyword ERR_COLUMN = Keyword.intern(ERR_NS, "column");
 
 	public ReaderException(int line, int column, Throwable cause){
 		super(cause);
 		this.line = line;
 		this.column = column;
+		this.data = RT.map(ERR_LINE, line, ERR_COLUMN, column);
+	}
+
+	public IPersistentMap getData(){
+		return (IPersistentMap)data;
 	}
 }
 
@@ -195,11 +213,11 @@ static public Object read(PushbackReader r, boolean eofIsError, Object eofValue,
 static public Object read(PushbackReader r, boolean eofIsError, Object eofValue, boolean isRecursive, Object opts)
 {
 	// start with pendingForms null as reader conditional splicing is not allowed at top level
-	return read(r, eofIsError, eofValue, null, null, isRecursive, opts, null);
+	return read(r, eofIsError, eofValue, null, null, isRecursive, opts, null, (Resolver) RT.READER_RESOLVER.deref());
 }
 
 static private Object read(PushbackReader r, boolean eofIsError, Object eofValue, boolean isRecursive, Object opts, Object pendingForms) {
-	return read(r, eofIsError, eofValue, null, null, isRecursive, opts, ensurePending(pendingForms));
+	return read(r, eofIsError, eofValue, null, null, isRecursive, opts, ensurePending(pendingForms), (Resolver) RT.READER_RESOLVER.deref());
 }
 
 static private Object ensurePending(Object pendingForms) {
@@ -222,7 +240,9 @@ static private Object installPlatformFeature(Object opts) {
     }
 }
 
-static private Object read(PushbackReader r, boolean eofIsError, Object eofValue, Character returnOn, Object returnOnValue, boolean isRecursive, Object opts, Object pendingForms)
+static private Object read(PushbackReader r, boolean eofIsError, Object eofValue, Character returnOn,
+                           Object returnOnValue, boolean isRecursive, Object opts, Object pendingForms,
+                           Resolver resolver)
 {
     if(RT.READEVAL.deref() == UNKNOWN)
         throw Util.runtimeException("Reading disallowed - *read-eval* bound to :unknown");
@@ -282,7 +302,7 @@ static private Object read(PushbackReader r, boolean eofIsError, Object eofValue
 				}
 
 			String token = readToken(r, (char) ch);
-			return interpretToken(token);
+			return interpretToken(token, resolver);
 			}
 		}
 	catch(Exception e)
@@ -370,7 +390,7 @@ static private int readUnicodeChar(PushbackReader r, int initch, int base, int l
 	return uc;
 }
 
-static private Object interpretToken(String s) {
+static private Object interpretToken(String s, Resolver resolver) {
 	if(s.equals("nil"))
 		{
 		return null;
@@ -385,7 +405,7 @@ static private Object interpretToken(String s) {
 		}
 	Object ret = null;
 
-	ret = matchSymbol(s);
+	ret = matchSymbol(s, resolver);
 	if(ret != null)
 		return ret;
 
@@ -393,7 +413,7 @@ static private Object interpretToken(String s) {
 }
 
 
-private static Object matchSymbol(String s){
+private static Object matchSymbol(String s, Resolver resolver){
 	Matcher m = symbolPat.matcher(s);
 	if(m.matches())
 		{
@@ -407,17 +427,33 @@ private static Object matchSymbol(String s){
 		if(s.startsWith("::"))
 			{
 			Symbol ks = Symbol.intern(s.substring(2));
-			Namespace kns;
-			if(ks.ns != null)
-				kns = Compiler.namespaceFor(ks);
-			else
-				kns = Compiler.currentNS();
-			//auto-resolving keyword
-			if (kns != null)
-				return Keyword.intern(kns.name.name,ks.name);
-			else
-				return null;
-			}
+            if(resolver != null)
+                {
+                Symbol nsym;
+                if(ks.ns != null)
+                    nsym = resolver.resolveAlias(Symbol.intern(ks.ns));
+                else
+                    nsym = resolver.currentNS();
+                //auto-resolving keyword
+                if(nsym != null)
+                    return Keyword.intern(nsym.name, ks.name);
+                else
+                    return null;
+                }
+            else
+                {
+                Namespace kns;
+                if(ks.ns != null)
+                    kns = Compiler.currentNS().lookupAlias(Symbol.intern(ks.ns));
+                else
+                    kns = Compiler.currentNS();
+                //auto-resolving keyword
+                if(kns != null)
+                    return Keyword.intern(kns.name.name, ks.name);
+                else
+                    return null;
+                }
+            }
 		boolean isKeyword = s.charAt(0) == ':';
 		Symbol sym = Symbol.intern(s.substring(isKeyword ? 1 : 0));
 		if(isKeyword)
@@ -640,19 +676,27 @@ public static class NamespaceMapReader extends AFn{
 		// Resolve autoresolved ns
 		String ns;
 		if (auto) {
+            Resolver resolver = (Resolver) RT.READER_RESOLVER.deref();
 			if (sym == null) {
-				ns = Compiler.currentNS().getName().getName();
+                if(resolver != null)
+                    ns = resolver.currentNS().name;
+                else
+				    ns = Compiler.currentNS().getName().getName();
 			} else if (!(sym instanceof Symbol) || ((Symbol)sym).getNamespace() != null) {
 				throw Util.runtimeException("Namespaced map must specify a valid namespace: " + sym);
 			} else {
-				Namespace resolvedNS = Compiler.currentNS().lookupAlias((Symbol)sym);
-				if(resolvedNS == null)
-					resolvedNS = Namespace.find((Symbol)sym);
+				Symbol resolvedNS;
+				if (resolver != null)
+                    resolvedNS = resolver.resolveAlias((Symbol) sym);
+				else{
+                    Namespace rns = Compiler.currentNS().lookupAlias((Symbol)sym);
+                    resolvedNS = rns != null?rns.getName():null;
+                }
 
 				if(resolvedNS == null) {
 					throw Util.runtimeException("Unknown auto-resolved namespace alias: " + sym);
 				} else {
-					ns = resolvedNS.getName().getName();
+					ns = resolvedNS.getName();
 				}
 			}
 		} else if (!(sym instanceof Symbol) || ((Symbol)sym).getNamespace() != null) {
@@ -667,35 +711,51 @@ public static class NamespaceMapReader extends AFn{
 			throw Util.runtimeException("Namespaced map literal must contain an even number of forms");
 
 		// Construct output map
-		IPersistentMap m = RT.map();
+		Object[] a = new Object[kvs.size()];
 		Iterator iter = kvs.iterator();
-		while(iter.hasNext()) {
+		for(int i = 0; iter.hasNext(); i += 2) {
 			Object key = iter.next();
 			Object val = iter.next();
 
 			if(key instanceof Keyword) {
 				Keyword kw = (Keyword) key;
 				if (kw.getNamespace() == null) {
-					m = m.assoc(Keyword.intern(ns, kw.getName()), val);
+					key = Keyword.intern(ns, kw.getName());
 				} else if (kw.getNamespace().equals("_")) {
-					m = m.assoc(Keyword.intern(null, kw.getName()), val);
-				} else {
-					m = m.assoc(kw, val);
+					key = Keyword.intern(null, kw.getName());
 				}
 			} else if(key instanceof Symbol) {
 				Symbol s = (Symbol) key;
 				if (s.getNamespace() == null) {
-					m = m.assoc(Symbol.intern(ns, s.getName()), val);
+					key = Symbol.intern(ns, s.getName());
 				} else if (s.getNamespace().equals("_")) {
-					m = m.assoc(Symbol.intern(null, s.getName()), val);
-				} else {
-					m = m.assoc(s, val);
+					key = Symbol.intern(null, s.getName());
 				}
-			} else {
-				m = m.assoc(key, val);
 			}
+			a[i] = key;
+			a[i+1] = val;
 		}
-		return m;
+		return RT.map(a);
+	}
+}
+
+
+public static class SymbolicValueReader extends AFn{
+
+    static IPersistentMap  specials = PersistentHashMap.create(Symbol.intern("Inf"), Double.POSITIVE_INFINITY,
+                                                               Symbol.intern("-Inf"), Double.NEGATIVE_INFINITY,
+                                                               Symbol.intern("NaN"), Double.NaN);
+
+	public Object invoke(Object reader, Object quote, Object opts, Object pendingForms) {
+		PushbackReader r = (PushbackReader) reader;
+		Object o = read(r, true, null, true, opts, ensurePending(pendingForms));
+
+		if (!(o instanceof Symbol))
+			throw Util.runtimeException("Invalid token: ##" + o);
+		if (!(specials.containsKey(o)))
+			throw Util.runtimeException("Unknown symbolic value: ##" + o);
+
+		return specials.valAt(o);
 	}
 }
 
@@ -862,7 +922,7 @@ static class ArgReader extends AFn{
 		PushbackReader r = (PushbackReader) reader;
 		if(ARG_ENV.deref() == null)
 			{
-			return interpretToken(readToken(r, '%'));
+			return interpretToken(readToken(r, '%'), null);
 			}
 		int ch = read1(r);
 		unread(r, ch);
@@ -904,7 +964,8 @@ public static class MetaReader extends AFn{
 			{
 			if(line != -1 && o instanceof ISeq)
 				{
-				meta = ((IPersistentMap) meta).assoc(RT.LINE_KEY, line).assoc(RT.COLUMN_KEY, column);
+				meta = RT.assoc(meta, RT.LINE_KEY, RT.get(meta, RT.LINE_KEY, line));
+				meta = RT.assoc(meta, RT.COLUMN_KEY, RT.get(meta,RT.COLUMN_KEY, column));
 				}
 			if(o instanceof IReference)
 				{
@@ -947,6 +1008,7 @@ public static class SyntaxQuoteReader extends AFn{
 			ret = RT.list(Compiler.QUOTE, form);
 		else if(form instanceof Symbol)
 			{
+            Resolver resolver = (Resolver) RT.READER_RESOLVER.deref();
 			Symbol sym = (Symbol) form;
 			if(sym.ns == null && sym.name.endsWith("#"))
 				{
@@ -963,13 +1025,43 @@ public static class SyntaxQuoteReader extends AFn{
 			else if(sym.ns == null && sym.name.endsWith("."))
 				{
 				Symbol csym = Symbol.intern(null, sym.name.substring(0, sym.name.length() - 1));
-				csym = Compiler.resolveSymbol(csym);
+				if(resolver != null){
+                    Symbol rc = resolver.resolveClass(csym);
+                    if(rc != null)
+                        csym = rc;
+                }
+				else
+				    csym = Compiler.resolveSymbol(csym);
 				sym = Symbol.intern(null, csym.name.concat("."));
 				}
 			else if(sym.ns == null && sym.name.startsWith("."))
 				{
 				// Simply quote method names.
 				}
+            else if(resolver != null)
+                {
+                Symbol nsym = null;
+                if(sym.ns != null){
+                    Symbol alias = Symbol.intern(null, sym.ns);
+                    nsym = resolver.resolveClass(alias);
+                    if(nsym == null)
+                        nsym = resolver.resolveAlias(alias);
+                    }
+                if(nsym != null){
+                    // Classname/foo -> package.qualified.Classname/foo
+                    sym = Symbol.intern(nsym.name, sym.name);
+                    }
+                else if(sym.ns == null){
+                    Symbol rsym = resolver.resolveClass(sym);
+                    if(rsym == null)
+                        rsym = resolver.resolveVar(sym);
+                    if(rsym != null)
+                        sym = rsym;
+                    else
+                        sym = Symbol.intern(resolver.currentNS().name,sym.name);
+                }
+                //leave alone if qualified
+                }
 			else
 				{
 				Object maybeClass = null;
@@ -1155,7 +1247,10 @@ public static class ListReader extends AFn{
 //		IObj s = (IObj) RT.seq(list);
 		if(line != -1)
 			{
-			return s.withMeta(RT.map(RT.LINE_KEY, line, RT.COLUMN_KEY, column));
+			Object meta = RT.meta(s);
+			meta = RT.assoc(meta, RT.LINE_KEY, RT.get(meta, RT.LINE_KEY, line));
+			meta = RT.assoc(meta, RT.COLUMN_KEY, RT.get(meta,RT.COLUMN_KEY, column));
+			return s.withMeta((IPersistentMap)meta);
 			}
 		else
 			return s;
@@ -1296,10 +1391,12 @@ public static List readDelimitedList(char delim, PushbackReader r, boolean isRec
 			((LineNumberingPushbackReader) r).getLineNumber() : -1;
 
 	ArrayList a = new ArrayList();
+	Resolver resolver = (Resolver) RT.READER_RESOLVER.deref();
 
 	for(; ;) {
 
-		Object form = read(r, false, READ_EOF, delim, READ_FINISHED, isRecursive, opts, pendingForms);
+		Object form = read(r, false, READ_EOF, delim, READ_FINISHED, isRecursive, opts, pendingForms,
+                           resolver);
 
 		if (form == READ_EOF) {
 			if (firstline < 0)
@@ -1445,7 +1542,7 @@ public static class ConditionalReader extends AFn {
 		for(; ;) {
 			if(result == READ_STARTED) {
 				// Read the next feature
-				form = read(r, false, READ_EOF, ')', READ_FINISHED, true, opts, pendingForms);
+				form = read(r, false, READ_EOF, ')', READ_FINISHED, true, opts, pendingForms, null);
 
 				if (form == READ_EOF) {
 					if (firstline < 0)
@@ -1463,7 +1560,7 @@ public static class ConditionalReader extends AFn {
 
 					//Read the form corresponding to the feature, and assign it to result if everything is kosher
 
-					form = read(r, false, READ_EOF, ')', READ_FINISHED, true, opts, pendingForms);
+					form = read(r, false, READ_EOF, ')', READ_FINISHED, true, opts, pendingForms, (Resolver) RT.READER_RESOLVER.deref());
 
 					if (form == READ_EOF) {
 						if (firstline < 0)
@@ -1484,7 +1581,7 @@ public static class ConditionalReader extends AFn {
 			// When we already have a result, or when the feature didn't match, discard the next form in the reader
 			try {
 				Var.pushThreadBindings(RT.map(RT.SUPPRESS_READ, RT.T));
-				form = read(r, false, READ_EOF, ')', READ_FINISHED, true, opts, pendingForms);
+				form = read(r, false, READ_EOF, ')', READ_FINISHED, true, opts, pendingForms, (Resolver) RT.READER_RESOLVER.deref());
 
 				if (form == READ_EOF) {
 					if (firstline < 0)

@@ -72,11 +72,11 @@
       (is (= "two-arg baz!" (baz obj nil)))
       (is (thrown? AbstractMethodError (baz obj)))))
   (testing "error conditions checked when defining protocols"
-    (is (thrown-with-msg?
+    (is (thrown-with-cause-msg?
          Exception
          #"Definition of function m in protocol badprotdef must take at least one arg."
          (eval '(defprotocol badprotdef (m [])))))
-    (is (thrown-with-msg?
+    (is (thrown-with-cause-msg?
          Exception
          #"Function m in protocol badprotdef was redefined. Specify all arities in single definition."
          (eval '(defprotocol badprotdef (m [this arg]) (m [this arg1 arg2]))))))
@@ -613,14 +613,14 @@
              (bar [this o] o)
              (baz [this] 1)
              (baz [this o] 2))]
-      (= :foo (.bar r :foo))
-      (= 1 (.baz r))
-      (= 2 (.baz r nil))))
+      (is (= :foo (.bar r :foo)))
+      (is (= 1 (.baz r)))
+      (is (= 2 (.baz r nil)))))
   (testing "destructuring in method def"
     (let [r (reify
              ExampleProtocol
              (bar [this [_ _ item]] item))]
-      (= :c (.bar r [:a :b :c]))))
+      (is (= :c (.bar r [:a :b :c])))))
   (testing "methods can recur"
     (let [r (reify
              java.util.List
